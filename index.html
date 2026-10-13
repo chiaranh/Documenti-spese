@@ -108,7 +108,7 @@ textarea{min-height:90px;font-size:.8rem;font-family:ui-monospace,monospace}
 .msg{margin:0;font-size:.88rem;color:var(--bad)}
 .msg.ok{color:var(--good)}
 
-:root{--c-fixed:#6b7f8a;--c-save:#e0a82e;--c-margin:var(--warn)}
+:root{--c-debt:#8a5a9c;--c-fixed:#6b7f8a;--c-save:#e0a82e;--c-margin:var(--warn)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--c-fixed:#8ea3ae}}
 :root[data-theme="dark"]{--c-fixed:#8ea3ae}
 .lab2{display:block;font-size:.75rem;color:var(--muted);letter-spacing:.03em}
@@ -123,6 +123,14 @@ textarea{min-height:90px;font-size:.8rem;font-family:ui-monospace,monospace}
 .two .lab{display:block;font-size:.75rem;color:var(--muted)}
 .two b{font-family:var(--f-display);font-size:1.15rem}
 details{border-top:1px solid var(--line);padding-top:8px}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--c-debt:#c39ad4}}
+:root[data-theme="dark"]{--c-debt:#c39ad4}
+.tiles .wide{grid-column:1/-1}
+.cl{display:flex;align-items:center;gap:10px;font-size:.9rem;align-self:end;padding-bottom:10px}
+.item.done .t span{text-decoration:line-through;color:var(--muted)}
+.hero .bar{background:rgba(255,255,255,.25)}
+.hero .bar i{background:var(--accent-ink)}
+details label.f,details .grid2,details .btn{margin-top:10px}
 summary{cursor:pointer;font-weight:600;color:var(--accent);padding:4px 0}
 </style>
 </head>
@@ -172,7 +180,7 @@ function dueDate(f,k){
 /* ---- Dati ---- */
 let migrated=false;
 function norm(o){
-  o.settings=Object.assign({startDay:16,name:''},o.settings||{});
+  o.settings=Object.assign({startDay:16,name:'',extraDay:6},o.settings||{});o.debts=o.debts||[];
   o.piggy=Object.assign({entries:[],pots:[],transfers:[]},o.piggy||{});
   const P=o.piggy;P.entries=P.entries||[];P.pots=P.pots||[];P.transfers=P.transfers||[];
   const fix=a=>(a||[]).forEach(b=>{if(b.save===undefined)b.save=/da parte|risparm/i.test(b.name)});
@@ -186,14 +194,14 @@ function norm(o){
         note:x.note||'',k:old?FIRST_KEY:k,method:old?'none':(x.method||'card'),pot:null,type:'manual'}));
       migrated=true}
     if('savings' in m){delete m.savings;migrated=true}
-    delete m.carryAuto;
+    delete m.carryAuto;m.extra=+m.extra||0;m.extraIn=!!m.extraIn;m.dplan=m.dplan||{};m.dpaid=m.dpaid||{};
     if(k<FIRST_KEY){delete o.months[k];migrated=true}
   });
   return o;
 }
 function seed(){
   const d=new Date(),k=mkKey(d),key=clampKey(d.getDate()>=16?k:prevKey(k));
-  return norm({tpl:{fixed:[],budgets:[]},months:{[key]:{salary:0,carry:0,cash:0,fixed:[],budgets:[],paid:{},exp:[]}}});
+  return norm({tpl:{fixed:[],budgets:[]},months:{[key]:{salary:0,carry:0,extra:0,extraIn:false,dplan:{},dpaid:{},cash:0,fixed:[],budgets:[],paid:{},exp:[]}}});
 }
 function load(){try{const s=localStorage.getItem(KEY);if(s){const o=JSON.parse(s);if(o&&o.months&&o.tpl)return norm(o)}}catch(e){}return seed()}
 function saveLocal(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
@@ -205,11 +213,25 @@ let cur=curKey(),tab='riepilogo',method='card',msg='',closing=false,gateMode='lo
 function ensure(k){
   if(S.months[k])return S.months[k];
   const p=S.months[prevKey(k)];
-  S.months[k]={salary:p?p.salary:0,carry:p&&p.closed?p.closed.carried:0,cash:0,fixed:clone(S.tpl.fixed),budgets:clone(S.tpl.budgets),paid:{},exp:[]};
+  S.months[k]={salary:p?p.salary:0,carry:p&&p.closed?p.closed.carried:0,extra:p?p.extra:0,extraIn:false,dplan:{},dpaid:{},cash:0,fixed:clone(S.tpl.fixed),budgets:clone(S.tpl.budgets),paid:{},exp:[]};
   saveLocal();return S.months[k];
 }
+const extraDay=()=>Math.min(31,Math.max(1,(S.settings&&S.settings.extraDay)||6));
+const extraDate=k=>dueDate({day:extraDay()},k);
+/* debiti: residuo all'inizio del periodo = importo iniziale meno quanto versato nei periodi precedenti */
+function debtInfo(d,m,k){
+  const paidBefore=Object.keys(S.months).filter(x=>x<k).reduce((t,x)=>t+(+(S.months[x].dpaid||{})[d.id]||0),0);
+  const before=Math.max(0,r2(d.start-paidBefore));
+  const wanted=m.dplan&&m.dplan[d.id]!==undefined?m.dplan[d.id]:d.monthly;
+  const plan=r2(Math.max(0,Math.min(wanted,before))),paid=r2(+(m.dpaid||{})[d.id]||0);
+  return{before,plan,paid,after:r2(before-paid),afterPlan:r2(before-Math.max(plan,paid))};
+}
 function calc(m,k){
-  const disp=m.salary+m.carry,fixed=sum(m.fixed,'amount');
+  const ext=m.extra||0,extPend=m.extraIn?0:ext;
+  const disp=m.salary+m.carry+ext,fixed=sum(m.fixed,'amount');
+  let debtPlan=0,debtPaid=0;
+  S.debts.forEach(d=>{const i=debtInfo(d,m,k);debtPlan+=Math.max(i.plan,i.paid);debtPaid+=i.paid});
+  const debtDue=debtPlan-debtPaid;
   const paidFixed=m.fixed.filter(f=>m.paid[f.id]).reduce((t,f)=>t+f.amount,0);
   const spent={};let extra=0,cashSp=0,cardSp=0;
   m.exp.forEach(e=>{
@@ -223,9 +245,9 @@ function calc(m,k){
   const man=S.piggy.entries.filter(e=>e.k===k&&e.type==='manual');
   const manNet=sum(man.filter(e=>e.method!=='none'),'amount'),manCard=sum(man.filter(e=>e.method==='card'),'amount'),manCash=sum(man.filter(e=>e.method==='cash'),'amount');
   /* soldi utilizzabili dopo le spese previste: stipendio e avanzo, meno fisse, meno quanto va nel salvadanaio, meno spese fuori categoria */
-  const afterPlanned=disp-fixed-savePlan-extra-manNet;
-  const cardNow=disp-paidFixed-m.cash-cardSp-manCard,unpaid=fixed-paidFixed,cashLeft=m.cash-cashSp-manCash;
-  return{disp,fixed,paidFixed,unpaid,spent,extra,cashSp,cardSp,cardNow,cashLeft,afterFixed:cardNow-unpaid,
+  const afterPlanned=disp-fixed-debtPlan-savePlan-extra-manNet;
+  const cardNow=disp-extPend-paidFixed-debtPaid-m.cash-cardSp-manCard,unpaid=fixed-paidFixed,cashLeft=m.cash-cashSp-manCash;
+  return{disp,ext,extPend,debtPlan,debtPaid,debtDue,fixed,paidFixed,unpaid,spent,extra,cashSp,cardSp,cardNow,cashLeft,afterFixed:cardNow-unpaid,afterDue:cardNow-unpaid-debtDue,
     usable,usableSpent,saveAmt,savePlan,saveSpent,afterPlanned,margin:afterPlanned-usable,
     avanzo:afterPlanned-usableSpent,previsto:afterPlanned-liveFull,restTot,spentTot,budTot,manNet};
 }
@@ -265,6 +287,8 @@ function view(){
   if(tab==='risparmi')return header()+risparmi(m,c);
   if(tab==='spese')return header()+spese(m,c);
   if(tab==='fisse')return header()+fisse(m,c);
+  if(tab==='budget')return header()+budget(m,c);
+  if(tab==='debiti')return header()+debiti(m,c);
   return header()+riepilogo(m,c);
 }
 function budRow(b,c){
@@ -279,8 +303,8 @@ function riepilogo(m,c){
   const pig=piggyInfo();
   const sortedFixed=[...m.fixed].sort((a,b)=>{const x=dueDate(a,cur),y=dueDate(b,cur);return (x?x.getTime():9e15)-(y?y.getTime():9e15)});
   const seg=(v,col)=>v>0.004?`<i style="flex:${v};background:${col}"></i>`:'';
-  const dist=`<div class="dist" role="img" aria-label="Distribuzione dello stipendio">${seg(c.fixed,'var(--c-fixed)')}${seg(c.savePlan,'var(--c-save)')}${seg(c.usable,'var(--accent)')}${seg(c.margin,'var(--c-margin)')}</div>
-    <div class="legend"><span style="--c:var(--c-fixed)">Spese fisse</span><span style="--c:var(--c-save)">Salvadanaio</span><span style="--c:var(--accent)">Vivere</span><span style="--c:var(--c-margin)">Margine</span></div>`;
+  const dist=`<div class="dist" role="img" aria-label="Distribuzione dello stipendio">${seg(c.fixed,'var(--c-fixed)')}${seg(c.debtPlan,'var(--c-debt)')}${seg(c.savePlan,'var(--c-save)')}${seg(c.usable,'var(--accent)')}${seg(c.margin,'var(--c-margin)')}</div>
+    <div class="legend"><span style="--c:var(--c-fixed)">Spese fisse</span>${c.debtPlan>0?'<span style="--c:var(--c-debt)">Debiti</span>':''}<span style="--c:var(--c-save)">Salvadanaio</span><span style="--c:var(--accent)">Vivere</span><span style="--c:var(--c-margin)">Margine</span></div>`;
   const over=c.margin<-0.004?`<div class="alertbox" role="alert">Hai assegnato ${eur(-c.margin)} in più di quello che hai a disposizione. Riduci un budget o una voce da mettere da parte.</div>`:'';
   const fixedList=sortedFixed.map(f=>{const d=dueDate(f,cur);
     return`<div class="item"><div class="t"><span>${esc(f.name)}</span><small>${d?'Entro il '+shortDate(d):'Data libera'}</small></div><span class="amt num">${eur(f.amount)}</span></div>`}).join('');
@@ -300,30 +324,35 @@ function riepilogo(m,c){
       <p class="note">A fine periodo decidi quanto dell'avanzo (${eur(c.avanzo)}) va nel salvadanaio e quanto riporti nel periodo successivo.</p>
       <button class="btn" data-a="closestart">Chiudi il periodo</button></section>`;
   return`<section class="hero"><div><div class="lab">Soldi utilizzabili dopo le spese previste</div><div class="big num">${eur(c.avanzo)}</div>
-    <div class="sub num">Disponibile ${eur(c.disp)} · Fisse ${eur(c.fixed)} · Salvadanaio ${eur(c.savePlan)}</div></div>
+    <div class="sub num">Disponibile ${eur(c.disp)} · Fisse ${eur(c.fixed)}${c.debtPlan>0?' · Debiti '+eur(c.debtPlan):''} · Salvadanaio ${eur(c.savePlan)}</div></div>
     <div class="row"><div><span class="lab">Su carta</span><b class="num">${eur(c.cardNow)}</b></div>
     <div><span class="lab">Contanti</span><b class="num">${eur(c.cashLeft)}</b></div>
-    <div><span class="lab">Fisse da pagare</span><b class="num">${eur(c.unpaid)}</b></div></div>
-    ${c.afterFixed<0?`<div class="alertbox" role="alert">Attenzione: sulla carta mancano ${eur(-c.afterFixed)} per coprire le spese fisse ancora da pagare.</div>`:`<div class="sub">Dopo le spese fisse non ancora pagate, su carta restano ${eur(c.afterFixed)}.</div>`}
+    <div><span class="lab">Fisse da pagare</span><b class="num">${eur(c.unpaid)}</b></div>
+    ${c.debtDue>0.004?`<div><span class="lab">Rate debiti</span><b class="num">${eur(c.debtDue)}</b></div>`:''}</div>
+    ${c.afterDue<0?(c.afterDue+c.extPend>=0?`<div class="alertbox" role="status">Ora su carta mancano ${eur(-c.afterDue)} per fisse${c.debtDue>0?' e rate':''} da pagare, ma il ${esc(shortDate(extraDate(cur)))} arrivano ${eur(c.extPend)} dalla Svizzera.</div>`:`<div class="alertbox" role="alert">Attenzione: sulla carta mancano ${eur(-c.afterDue)} per coprire le spese fisse${c.debtDue>0?' e le rate dei debiti':''} ancora da pagare.</div>`):`<div class="sub">Dopo ${c.debtDue>0?'fisse e rate':'le spese fisse'} non ancora pagate, su carta restano ${eur(c.afterDue)}.</div>`}
   </section>
   <section class="card"><h2>Il mio mese</h2>
     <div class="grid2"><label class="f" for="in-sal">Stipendio<input id="in-sal" inputmode="decimal" data-f="salary" value="${m.salary}"></label>
     <label class="f" for="in-car">Avanzo periodo precedente<input id="in-car" inputmode="decimal" data-f="carry" value="${m.carry}"></label></div>
-    <div><span class="lab2">Disponibile nel periodo</span><div class="big2 num">${eur(c.disp)}</div></div>
+    <div class="grid2"><label class="f" for="in-ext">Stipendio Svizzera · ${esc(shortDate(extraDate(cur)))}<input id="in-ext" inputmode="decimal" data-f="extra" value="${m.extra||0}"></label>
+    <label class="cl"><input type="checkbox" data-f="extraIn" ${m.extraIn?'checked':''}> Già accreditato</label></div>
+    <div><span class="lab2">Disponibile nel periodo</span><div class="big2 num">${eur(c.disp)}</div>
+    ${c.extPend>0?`<small class="muted num">di cui ${eur(c.extPend)} in arrivo il ${esc(shortDate(extraDate(cur)))}</small>`:''}</div>
     <div class="tiles">
       <div><span class="lab2">Spese fisse</span><b class="num">${eur(c.fixed)}</b></div>
+      ${S.debts.length?`<div><span class="lab2">Debiti (rate)</span><b class="num">${eur(c.debtPlan)}</b></div>`:''}
       <div><span class="lab2">Salvadanaio</span><b class="num">${eur(c.savePlan)}</b></div>
       <div><span class="lab2">Budget per vivere</span><b class="num">${eur(c.usable)}</b></div>
-      <div><span class="lab2">Margine residuo</span><b class="num ${cls(c.margin)}">${eur(c.margin)}</b></div></div>
+      <div class="wide"><span class="lab2">Margine residuo</span><b class="num ${cls(c.margin)}">${eur(c.margin)}</b></div></div>
     ${dist}${over}
-    <p class="note">Il margine è quello che resta da assegnare dopo spese fisse, salvadanaio e budget per vivere. Modifica i budget dalla scheda Fisse.</p>
+    <p class="note">Il margine è quello che resta da assegnare dopo spese fisse, rate dei debiti, salvadanaio e budget per vivere. Modifica le categorie dalla scheda Budget.</p>
     <details><summary>Dettaglio spese fisse (${m.fixed.length})</summary><div class="list">${fixedList||'<p class="note">Nessuna spesa fissa.</p>'}</div></details>
     <details><summary>Dettaglio budget e salvadanaio</summary><div class="list">${budList||'<p class="note">Nessuna categoria.</p>'}</div></details></section>
   <section class="card"><h2>Contanti</h2>
     <label class="f" for="in-cash">Trasferiti da carta a contanti<input id="in-cash" inputmode="decimal" data-f="cash" value="${m.cash}"></label>
     <p class="note">È un trasferimento tra carta e contanti, non una spesa. Le spese contano quando le registri.</p></section>
   <section class="card"><div class="sectionhead"><h2>Budget per vivere</h2><span class="num">${eur(c.usable)}</span></div>
-    ${living.map(b=>budRow(b,c)).join('')||'<p class="note">Nessuna categoria. Aggiungile dalla scheda Fisse.</p>'}
+    ${living.map(b=>budRow(b,c)).join('')||'<p class="note">Nessuna categoria. Aggiungile dalla scheda Budget.</p>'}
     ${living.length?`<div class="tot"><span>Residuo</span><span class="num ${cls(c.usable-c.usableSpent)}">${eur(c.usable-c.usableSpent)}</span></div>`:''}</section>
   ${saves.length?`<section class="card"><div class="sectionhead"><h2>Da mettere da parte</h2><span class="num">${eur(c.savePlan)}</span></div>
     ${saves.map(b=>budRow(b,c)).join('')}
@@ -358,23 +387,83 @@ function dueText(f,m){
   return diff<0?`Scaduta da ${-diff} gg`:diff===0?'Scade oggi':`Il ${shortDate(d)} · tra ${diff} gg`;
 }
 function fisse(m,c){
-  const sorted=[...m.fixed].sort((a,b)=>{const x=dueDate(a,cur),y=dueDate(b,cur);return (x?x.getTime():9e15)-(y?y.getTime():9e15)});
-  const rows=sorted.map(f=>`<div class="item"><button class="check" data-a="pay" data-id="${f.id}" aria-pressed="${!!m.paid[f.id]}" aria-label="Segna ${esc(f.name)} come pagata">${m.paid[f.id]?'✓':''}</button>
+  const t=f=>{const d=dueDate(f,cur);return d?d.getTime():9e15};
+  const sorted=[...m.fixed].sort((a,b)=>(!!m.paid[a.id]-!!m.paid[b.id])||t(a)-t(b));
+  const pc=c.fixed?Math.min(100,c.paidFixed/c.fixed*100):0;
+  const rows=sorted.map(f=>`<div class="item ${m.paid[f.id]?'done':''}"><button class="check" data-a="pay" data-id="${f.id}" aria-pressed="${!!m.paid[f.id]}" aria-label="Segna ${esc(f.name)} come pagata">${m.paid[f.id]?'✓':''}</button>
     <div class="t"><span>${esc(f.name)}</span><small>${dueText(f,m)}</small></div><span class="amt num">${eur(f.amount)}</span></div>`).join('');
-  const ed=(arr,kind)=>arr.map(x=>`<div class="edit"><input data-k="${kind}" data-id="${x.id}" data-p="name" value="${esc(x.name)}" aria-label="Nome">
-    <input data-k="${kind}" data-id="${x.id}" data-p="amount" inputmode="decimal" value="${x.amount}" aria-label="Importo">
-    ${kind==='fixed'?`<input data-k="${kind}" data-id="${x.id}" data-p="day" inputmode="numeric" value="${x.day||''}" placeholder="gg" aria-label="Giorno del mese">`
-      :`<input type="checkbox" data-k="${kind}" data-id="${x.id}" data-p="save" ${x.save?'checked':''} aria-label="Da mettere da parte">`}
-    <button class="x" data-a="deli" data-k="${kind}" data-id="${x.id}" aria-label="Rimuovi">✕</button></div>`).join('');
-  return`<section class="card"><h2>Da pagare in questo periodo</h2><div class="list">${rows||'<p class="note">Nessuna spesa fissa. Aggiungile qui sotto.</p>'}</div>
-    <p class="note">Pagate ${eur(c.paidFixed)} · restano ${eur(c.unpaid)}</p></section>
-  <section class="card"><h2>Modifica spese fisse</h2><p class="note">Nome, importo e giorno del mese. Le modifiche valgono da questo periodo in poi.</p>
+  const ed=m.fixed.map(x=>`<div class="edit"><input data-k="fixed" data-id="${x.id}" data-p="name" value="${esc(x.name)}" aria-label="Nome">
+    <input data-k="fixed" data-id="${x.id}" data-p="amount" inputmode="decimal" value="${x.amount}" aria-label="Importo">
+    <input data-k="fixed" data-id="${x.id}" data-p="day" inputmode="numeric" value="${x.day||''}" placeholder="gg" aria-label="Giorno del mese">
+    <button class="x" data-a="deli" data-k="fixed" data-id="${x.id}" aria-label="Rimuovi">✕</button></div>`).join('');
+  return`<section class="hero"><div><div class="lab">Ancora da pagare</div><div class="big num">${eur(c.unpaid)}</div>
+    <div class="sub num">Pagate ${eur(c.paidFixed)} su ${eur(c.fixed)}</div></div>
+    <div class="bar" role="img" aria-label="Spese fisse pagate"><i style="width:${pc}%"></i></div>
+    <div class="row"><div><span class="lab">Su carta ora</span><b class="num">${eur(c.cardNow)}</b></div>
+    <div><span class="lab">Dopo averle pagate</span><b class="num">${eur(c.afterFixed)}</b></div></div>
+    ${c.afterFixed<0?`<div class="alertbox" role="alert">Attenzione: sulla carta mancano ${eur(-c.afterFixed)} per coprire le spese fisse ancora da pagare.</div>`:''}</section>
+  <section class="card"><h2>Da pagare in questo periodo</h2><div class="list">${rows||'<p class="note">Nessuna spesa fissa. Aggiungile qui sotto.</p>'}</div>
+    <p class="note">Spunta una spesa quando l'hai pagata: il residuo si aggiorna.</p></section>
+  <section class="card"><h2>Modifica spese fisse</h2><p class="note">Nome, importo e giorno del mese. Le modifiche valgono da questo periodo in poi. Budget e salvadanaio sono nella scheda Budget.</p>
     <div class="edit head"><span>Nome</span><span>Importo</span><span>Giorno</span><span></span></div>
-    ${ed(m.fixed,'fixed')}<button class="btn ghost small" data-a="addi" data-k="fixed">+ Spesa fissa</button></section>
-  <section class="card"><h2>Modifica categorie</h2>
-    <p class="note">Spunta "Da parte" per le categorie che vanno nel salvadanaio: l'importo viene versato in automatico ogni periodo e tolto dai soldi utilizzabili. Le altre sono i budget per vivere.</p>
-    <div class="edit head"><span>Nome</span><span>Budget</span><span>Da parte</span><span></span></div>
-    ${ed(m.budgets,'budgets')}<button class="btn ghost small" data-a="addi" data-k="budgets">+ Categoria</button></section>`;
+    ${ed}<button class="btn ghost small" data-a="addi" data-k="fixed">+ Spesa fissa</button></section>`;
+}
+function budget(m,c){
+  const living=m.budgets.filter(b=>!b.save),saves=m.budgets.filter(b=>b.save);
+  const ed=arr=>arr.map(x=>{const s=c.spent[x.id]||0;
+    return`<div class="bud"><div class="edit" style="grid-template-columns:1fr 96px 32px"><input data-k="budgets" data-id="${x.id}" data-p="name" value="${esc(x.name)}" aria-label="Nome">
+    <input data-k="budgets" data-id="${x.id}" data-p="amount" inputmode="decimal" value="${x.amount}" aria-label="Importo">
+    <button class="x" data-a="deli" data-k="budgets" data-id="${x.id}" aria-label="Rimuovi">✕</button></div>
+    <small class="num">Speso ${eur(s)} · ${x.amount-s<0?'sforato di '+eur(s-x.amount):'residuo '+eur(x.amount-s)}</small></div>`}).join('');
+  return`<section class="hero"><div><div class="lab">Budget per vivere</div><div class="big num">${eur(c.usable)}</div>
+    <div class="sub num">Speso ${eur(c.usableSpent)} · residuo ${eur(c.usable-c.usableSpent)}</div></div>
+    <div class="row"><div><span class="lab">Da mettere da parte</span><b class="num">${eur(c.savePlan)}</b></div>
+    <div><span class="lab">Ancora da assegnare</span><b class="num">${eur(c.margin)}</b></div></div>
+    ${c.margin<-0.004?`<div class="alertbox" role="alert">Hai assegnato ${eur(-c.margin)} in più di quello che hai a disposizione.</div>`:''}</section>
+  <section class="card"><h2>Budget per vivere</h2><p class="note">Le tue categorie di spesa del periodo. Cambia nome e importo quando vuoi: vale da questo periodo in poi.</p>
+    <div class="edit head" style="grid-template-columns:1fr 96px 32px"><span>Categoria</span><span>Budget</span><span></span></div>
+    ${ed(living)||''}${living.length?'':'<p class="note">Nessuna categoria.</p>'}
+    <button class="btn ghost small" data-a="addi" data-k="budgets" data-save="0">+ Categoria</button></section>
+  <section class="card"><h2>Da mettere da parte</h2><p class="note">Questi importi vanno nel salvadanaio in automatico a ogni periodo e vengono tolti dai soldi utilizzabili. Poi li dividi per scopo nella scheda Salvadanaio.</p>
+    <div class="edit head" style="grid-template-columns:1fr 96px 32px"><span>Voce</span><span>Importo</span><span></span></div>
+    ${ed(saves)}${saves.length?'':'<p class="note">Nessuna voce.</p>'}
+    <button class="btn ghost small" data-a="addi" data-k="budgets" data-save="1">+ Voce da parte</button></section>`;
+}
+const monthYear=k=>{const[y,mo]=k.split('-').map(Number);return monName(y,mo-1)+' '+y};
+function debiti(m,c){
+  const infos=S.debts.map(d=>({d,i:debtInfo(d,m,cur)}));
+  const totAfter=infos.reduce((t,x)=>t+x.i.after,0);
+  const cards=infos.map(({d,i})=>{
+    const done=r2(d.start-i.after),pc=d.start?Math.max(0,Math.min(100,done/d.start*100)):0;
+    const rem=r2(i.before-Math.max(i.plan,i.paid));
+    let end;
+    if(i.before<=0.004)end='Debito estinto.';
+    else if(rem<=0.004)end='Con questa rata il debito è estinto.';
+    else if(d.monthly>0){let k=cur;for(let x=0,n=Math.ceil(rem/d.monthly-1e-9);x<n;x++)k=nextKey(k);end='Se versi '+eur(d.monthly)+' al mese, l\'ultima rata è nel periodo che parte a '+monthYear(k)+'.'}
+    else end='';
+    return`<section class="card"><div class="sectionhead"><h2>${esc(d.name)}</h2><b class="num">${eur(i.after)}</b></div>
+    <div class="bar"><i style="width:${pc}%"></i></div>
+    <small class="num muted">Versato dall'inizio: ${eur(done)} · residuo iniziale ${eur(d.start)}</small>
+    <div class="grid2"><label class="f">Rata prevista (€)<input data-d="plan" data-id="${d.id}" inputmode="decimal" value="${i.plan}"></label>
+    <label class="f">Versato nel periodo (€)<input data-d="paid" data-id="${d.id}" inputmode="decimal" value="${i.paid}"></label></div>
+    <button class="btn ${i.paid>0?'ghost':''}" data-a="dpay" data-id="${d.id}">${i.paid>0?'Annulla versamento':'Segna rata versata ('+eur(i.plan)+')'}</button>
+    ${end?`<p class="note">${esc(end)}</p>`:''}
+    <details><summary>Modifica debito</summary>
+      <label class="f">Nome<input data-d="name" data-id="${d.id}" value="${esc(d.name)}"></label>
+      <div class="grid2"><label class="f">Residuo a inizio app (€)<input data-d="start" data-id="${d.id}" inputmode="decimal" value="${d.start}"></label>
+      <label class="f">Rata mensile (€)<input data-d="monthly" data-id="${d.id}" inputmode="decimal" value="${d.monthly}"></label></div>
+      <button class="btn ghost small" data-a="deldebt" data-id="${d.id}">Elimina debito</button></details></section>`}).join('');
+  return`<section class="hero"><div><div class="lab">Debiti residui</div><div class="big num">${eur(totAfter)}</div>
+    <div class="sub">La rata del periodo è già tolta dai soldi utilizzabili.</div></div>
+    <div class="row"><div><span class="lab">Rate del periodo</span><b class="num">${eur(c.debtPlan)}</b></div>
+    <div><span class="lab">Versate</span><b class="num">${eur(c.debtPaid)}</b></div>
+    <div><span class="lab">Da versare</span><b class="num">${eur(c.debtDue)}</b></div></div></section>
+  ${cards||'<section class="card"><p class="note">Nessun debito registrato. Aggiungine uno qui sotto, per esempio quello verso Fede.</p></section>'}
+  <section class="card"><h2>Nuovo debito</h2>
+    <label class="f" for="db-name">Con chi<input id="db-name" placeholder="es. Fede"></label>
+    <div class="grid2"><label class="f" for="db-start">Residuo oggi (€)<input id="db-start" inputmode="decimal" placeholder="0,00"></label>
+    <label class="f" for="db-monthly">Rata mensile (€)<input id="db-monthly" inputmode="decimal" placeholder="0,00"></label></div>
+    <button class="btn" data-a="adddebt">Aggiungi debito</button>${msg?`<p class="note">${esc(msg)}</p>`:''}</section>`;
 }
 function risparmi(m,c){
   const P=S.piggy,pig=piggyInfo();
@@ -396,7 +485,7 @@ function risparmi(m,c){
     <div class="row"><div><span class="lab">Generale</span><b class="num">${eur(pig.general)}</b></div>
     <div><span class="lab">Suddiviso</span><b class="num">${eur(pig.total-pig.general)}</b></div>
     <div><span class="lab">Questo periodo</span><b class="num">${eur(piggyAuto(cur))}</b></div></div>
-    <div class="sub">I soldi segnati "Da parte" in Fisse arrivano qui da soli. Dentro puoi suddividerli per scopo.</div></section>
+    <div class="sub">I soldi segnati "Da parte" nei Budget arrivano qui da soli. Dentro puoi suddividerli per scopo.</div></section>
   <section class="card"><h2>Suddivisione</h2>
     <div class="bud"><div class="h"><span>Generale (da suddividere)</span><b class="num">${eur(pig.general)}</b></div></div>
     ${potRows||'<p class="note">Nessun salvadanaio per scopo. Creane uno qui sotto, per esempio Emergenze o Vacanze.</p>'}
@@ -447,6 +536,7 @@ function account(){
     :`<p class="note">${cloudOn()?'':'La sincronizzazione online non è attiva: i dati restano su questo dispositivo.'}</p>`}</section>
   <section class="card"><h2>Periodo di spesa</h2>
     <label class="f" for="acc-day">Giorno dello stipendio<input id="acc-day" data-s="startDay" inputmode="numeric" value="${startDay()}"></label>
+    <label class="f" for="acc-ext">Giorno di accredito dello stipendio Svizzera<input id="acc-ext" data-s="extraDay" inputmode="numeric" value="${extraDay()}"></label>
     <p class="note">Ogni periodo va dal giorno ${startDay()} al giorno ${startDay()===1?'ultimo':startDay()-1} del mese dopo. Valori da 1 a 28.</p></section>`;
 }
 
@@ -543,7 +633,7 @@ function render(){
   if(cloudOn()&&!user){app.innerHTML=loginView();navBox.hidden=true;return}
   navBox.hidden=false;
   app.innerHTML=view();
-  const T=[['riepilogo','Riepilogo'],['spese','Spese'],['fisse','Fisse'],['risparmi','Salvadanaio'],['storico','Storico'],['account','Account']];
+  const T=[['riepilogo','Riepilogo'],['spese','Spese'],['fisse','Fisse'],['budget','Budget'],['risparmi','Salvadanaio'],['debiti','Debiti'],['storico','Storico'],['account','Account']];
   document.getElementById('nav').innerHTML=T.map(([k,l])=>`<button data-tab="${k}" ${tab===k?'aria-current="true"':''}>${l}</button>`).join('');
 }
 function edit(kind,id,fn){
@@ -617,11 +707,17 @@ document.addEventListener('click',async ev=>{
     P.transfers.push({id:uid(),date:today,amount,from,to});msg=''}
   else if(a==='deltr'){P.transfers=P.transfers.filter(x=>x.id!==id)}
   else if(a==='pay'){m.paid[id]=!m.paid[id]}
+  else if(a==='dpay'){const d=S.debts.find(x=>x.id===id);if(d){const i=debtInfo(d,m,cur);m.dpaid[id]=i.paid>0?0:i.plan}}
+  else if(a==='adddebt'){
+    const name=val('db-name').trim(),start=r2(num(val('db-start'))),monthly=r2(num(val('db-monthly')));
+    if(!name||start<=0){msg='Scrivi con chi e quanto resta da restituire.';render();return}
+    S.debts.push({id:uid(),name,start,monthly});msg=''}
+  else if(a==='deldebt'){S.debts=S.debts.filter(x=>x.id!==id);Object.values(S.months).forEach(x=>{delete x.dplan[id];delete x.dpaid[id]})}
   else if(a==='deli'){const k=t.dataset.k;
     if(k==='fixed'){Object.keys(S.months).filter(key=>key>=cur).forEach(key=>S.months[key].fixed=S.months[key].fixed.filter(i=>i.id!==id))}
     else m[k]=m[k].filter(i=>i.id!==id);
     S.tpl[k]=S.tpl[k].filter(i=>i.id!==id)}
-  else if(a==='addi'){const k=t.dataset.k,it=k==='fixed'?{id:uid(),name:'Nuova spesa',amount:0,day:0}:{id:uid(),name:'Nuova categoria',amount:0,save:false};
+  else if(a==='addi'){const k=t.dataset.k,sv=t.dataset.save==='1',it=k==='fixed'?{id:uid(),name:'Nuova spesa',amount:0,day:0}:{id:uid(),name:sv?'Nuova voce da parte':'Nuova categoria',amount:0,save:sv};
     if(k==='fixed'){Object.keys(S.months).filter(key=>key>=cur).forEach(key=>S.months[key].fixed.push({...it}))}
     else m[k].push(it);
     S.tpl[k].push({...it})}
@@ -631,7 +727,13 @@ document.addEventListener('click',async ev=>{
 });
 document.addEventListener('change',ev=>{
   const e=ev.target,m=S.months[cur];
-  if(e.dataset.f){m[e.dataset.f]=num(e.value)}
+  if(e.dataset.f){m[e.dataset.f]=e.type==='checkbox'?e.checked:num(e.value)}
+  else if(e.dataset.d){const d=S.debts.find(x=>x.id===e.dataset.id);if(d){const p=e.dataset.d;
+    if(p==='name')d.name=e.value.trim()||d.name;
+    else if(p==='start')d.start=Math.max(0,num(e.value));
+    else if(p==='monthly')d.monthly=Math.max(0,num(e.value));
+    else if(p==='plan')m.dplan[d.id]=Math.max(0,num(e.value));
+    else if(p==='paid')m.dpaid[d.id]=Math.max(0,Math.min(debtInfo(d,m,cur).before,num(e.value)))}}
   else if(e.dataset.k){const p=e.dataset.p;
     const v=p==='name'?e.value:p==='day'?Math.max(0,Math.min(31,parseInt(e.value)||0)):p==='save'?e.checked:num(e.value);
     edit(e.dataset.k,e.dataset.id,x=>x[p]=v)}
@@ -639,6 +741,7 @@ document.addEventListener('change',ev=>{
     if(p){if(e.dataset.pot==='name')p.name=e.value.trim()||p.name;else p.goal=Math.max(0,num(e.value))}}
   else if(e.dataset.s){
     if(e.dataset.s==='name')S.settings.name=e.value.trim();
+    if(e.dataset.s==='extraDay')S.settings.extraDay=Math.min(31,Math.max(1,parseInt(e.value)||6));
     if(e.dataset.s==='startDay'){S.settings.startDay=Math.min(28,Math.max(1,parseInt(e.value)||16));cur=curKey();ensure(cur)}}
   else return;
   save();render();
