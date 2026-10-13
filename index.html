@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="it"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0b6b5f">
+<meta name="theme-color" content="#285f78">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Spese">
@@ -12,17 +12,17 @@
 <style>
 /* Layout: app a colonna singola (max 560px), barra schede in basso, cifre grandi in alto. */
 :root{
-  --bg:#f2f4f3; --surface:#ffffff; --ink:#14201e; --muted:#5d6d6a; --line:#dbe2e0;
-  --accent:#0b6b5f; --accent-ink:#ffffff; --good:#1c7a45; --warn:#b4531a; --bad:#b3261e; --soft:#e4efec;
+  --bg:#f3f6f8; --surface:#ffffff; --ink:#18252d; --muted:#62727b; --line:#d9e2e7;
+  --accent:#285f78; --accent-ink:#ffffff; --good:#285f78; --warn:#a65d16; --bad:#b3261e; --soft:#e5eef3;
   --f-display:'Avenir Next','Trebuchet MS',system-ui,sans-serif; --f-body:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
   color-scheme:light;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
-  --bg:#0e1514; --surface:#17211f; --ink:#e6efed; --muted:#93a5a1; --line:#2a3836;
-  --accent:#4cc2b0; --accent-ink:#06201b; --good:#5fcf8d; --warn:#f0a066; --bad:#ff8a80; --soft:#1d2e2b; color-scheme:dark}}
+  --bg:#101a20; --surface:#18262f; --ink:#e8f0f4; --muted:#a0b2bd; --line:#2d414d;
+  --accent:#75b4d0; --accent-ink:#10232d; --good:#75b4d0; --warn:#f0b36e; --bad:#ff8a80; --soft:#223945; color-scheme:dark}}
 :root[data-theme="dark"]{
-  --bg:#0e1514; --surface:#17211f; --ink:#e6efed; --muted:#93a5a1; --line:#2a3836;
-  --accent:#4cc2b0; --accent-ink:#06201b; --good:#5fcf8d; --warn:#f0a066; --bad:#ff8a80; --soft:#1d2e2b; color-scheme:dark}
+  --bg:#101a20; --surface:#18262f; --ink:#e8f0f4; --muted:#a0b2bd; --line:#2d414d;
+  --accent:#75b4d0; --accent-ink:#10232d; --good:#75b4d0; --warn:#f0b36e; --bad:#ff8a80; --soft:#223945; color-scheme:dark}
 *{box-sizing:border-box}
 :root{padding-top:env(safe-area-inset-top,0px)}
 [hidden]{display:none!important}
@@ -43,7 +43,7 @@ h2{font-size:1.1rem}
 .hero .row div{min-width:0}
 .hero .row b{display:block;font-family:var(--f-display);font-size:1.15rem}
 .hero .sub{font-size:.85rem;opacity:.9}
-.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.sectionhead{display:flex;align-items:center;justify-content:space-between;gap:10px}.alertbox{background:var(--soft);border:1px solid var(--bad);border-radius:10px;padding:10px 12px;font-weight:600;font-size:.9rem}.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:12px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media(max-width:380px){.grid2{grid-template-columns:1fr}}
 label.f{display:flex;flex-direction:column;gap:4px;font-size:.8rem;color:var(--muted);min-width:0}
@@ -82,8 +82,8 @@ input:focus-visible,select:focus-visible,button:focus-visible,textarea:focus-vis
 .edit.head span:nth-child(3){text-align:center}
 .edit input:not([type=checkbox]){padding:8px}
 nav{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);display:flex;justify-content:center;padding:6px 8px calc(6px + env(safe-area-inset-bottom,0px))}
-nav .in{display:flex;width:100%;max-width:560px;gap:2px}
-nav button{flex:1;border:0;background:none;padding:10px 2px;border-radius:10px;color:var(--muted);cursor:pointer;font-weight:500;font-size:.8rem;min-width:0}
+nav .in{display:flex;width:100%;max-width:560px;gap:2px;overflow-x:auto}
+nav button{flex:1 0 auto;border:0;background:none;padding:10px 2px;border-radius:10px;color:var(--muted);cursor:pointer;font-weight:500;font-size:.76rem;min-width:0;white-space:nowrap}
 nav button[aria-current="true"]{background:var(--soft);color:var(--accent);font-weight:600}
 .scroll{overflow-x:auto}
 table{border-collapse:collapse;width:100%;min-width:420px}
@@ -151,7 +151,7 @@ function dueDate(f,k){
 function norm(o){
   o.settings=Object.assign({startDay:16,name:''},o.settings||{});
   const fix=a=>(a||[]).forEach(b=>{if(b.save===undefined)b.save=/da parte|risparm/i.test(b.name)});
-  fix(o.tpl.budgets);Object.values(o.months).forEach(m=>fix(m.budgets));
+  fix(o.tpl.budgets);Object.values(o.months).forEach(m=>{fix(m.budgets);if(!Array.isArray(m.savings))m.savings=[]});
   return o;
 }
 function seed(){
@@ -168,7 +168,7 @@ let cur=curKey(),tab='riepilogo',method='card',msg='',gateMode='login',lastEmail
 function ensure(k){
   if(S.months[k])return S.months[k];
   const p=S.months[prevKey(k)];
-  S.months[k]={salary:p?p.salary:0,carry:0,carryAuto:!!p,cash:0,fixed:clone(S.tpl.fixed),budgets:clone(S.tpl.budgets),paid:{},exp:[]};
+  S.months[k]={salary:p?p.salary:0,carry:0,carryAuto:!!p,cash:0,fixed:clone(S.tpl.fixed),budgets:clone(S.tpl.budgets),paid:{},exp:[],savings:[]};
   if(p)S.months[k].carry=r2(calc(p).avanzo);
   saveLocal();return S.months[k];
 }
@@ -190,9 +190,15 @@ function calc(m){
     planned+=Math.max(b.amount,s);
     actual+=b.save?Math.max(b.amount,s):s;
     restTot+=b.amount-s;spentTot+=s;budTot+=b.amount});
-  const cardNow=disp-paidFixed-m.cash-cardSp,unpaid=fixed-paidFixed;
-  return{disp,fixed,paidFixed,unpaid,spent,extra,cashSp,cardSp,cardNow,cashLeft:m.cash-cashSp,
-    afterFixed:cardNow-unpaid,avanzo:disp-fixed-actual,previsto:disp-fixed-planned,restTot,spentTot,budTot};
+  const sav=m.savings||[];
+  const savCardNet=sum(sav.filter(x=>x.method==='card').map(x=>({v:(x.kind==='withdraw'?-1:1)*x.amount})),'v');
+  const savCashNet=sum(sav.filter(x=>x.method==='cash').map(x=>({v:(x.kind==='withdraw'?-1:1)*x.amount})),'v');
+  const savingsNet=sum(sav.map(x=>({v:(x.kind==='withdraw'?-1:1)*x.amount})),'v');
+  const cardNow=disp-paidFixed-m.cash-cardSp-savCardNet,unpaid=fixed-paidFixed;
+  const cashLeft=m.cash-cashSp-savCashNet;
+  return{disp,fixed,paidFixed,unpaid,spent,extra,cashSp,cardSp,cardNow,cashLeft,
+    afterFixed:cardNow-unpaid,avanzo:disp-fixed-actual-savingsNet,previsto:disp-fixed-planned,
+    restTot,spentTot,budTot,savingsNet,savCardNet,savCashNet};
 }
 const cls=n=>n<0?'neg':'pos';
 const val=id=>{const e=document.getElementById(id);return e?e.value:''};
@@ -208,6 +214,7 @@ function header(){
 function view(){
   const m=ensure(cur);syncCarry(cur);const c=calc(m);
   if(tab==='storico')return storico();
+  if(tab==='risparmi')return risparmi();
   if(tab==='account')return account();
   if(tab==='spese')return header()+spese(m,c);
   if(tab==='fisse')return header()+fisse(m,c);
@@ -218,26 +225,33 @@ function riepilogo(m,c){
     return`<div class="bud"><div class="h"><span>${esc(b.name)}</span><span class="num">${eur(s)} <small>/ ${eur(b.amount)}</small></span></div>
     <div class="bar"><i class="${s>b.amount?'over':''}" style="width:${p}%"></i></div>
     <div class="h"><small>${b.save?'Accantonato per intero':'Conta solo quanto spendi'}</small>
-    <b class="num ${rest<0?'neg':'pos'}">${rest<0?'Sforato di '+eur(-rest):'Avanzo '+eur(rest)}</b></div></div>`}).join('');
+    <b class="num ${rest<0?'neg':'pos'}">${rest<0?'Sforato di '+eur(-rest):'Residuo '+eur(rest)}</b></div></div>`}).join('');
   const nextExists=!!S.months[nextKey(cur)];
   const carryNote=m.carryAuto?'Aggiornato in automatico':(S.months[prevKey(cur)]?'<button class="linkbtn" data-a="carryauto">Usa l\'avanzo automatico</button>':'');
-  return`<section class="hero"><div><div class="lab">Su carta adesso</div><div class="big num">${eur(c.cardNow)}</div></div>
-    <div class="row"><div><span class="lab">Dopo le fisse</span><b class="num">${eur(c.afterFixed)}</b></div>
-    <div><span class="lab">Contanti rimasti</span><b class="num">${eur(c.cashLeft)}</b></div>
-    <div><span class="lab">Avanzo attuale</span><b class="num">${eur(c.avanzo)}</b></div></div>
-    <div class="sub">Scende man mano che registri le spese. Se usi tutti i budget l'avanzo sarà ${eur(c.previsto)}.</div></section>
-  <section class="card"><h2>Entrate del periodo</h2><div class="grid2">
+  const savingsTotal=Object.values(S.months).reduce((t,x)=>t+sum((x.savings||[]).map(v=>({v:(v.kind==='withdraw'?-1:1)*v.amount})),'v'),0);
+  return`<section class="hero"><div><div class="lab">Soldi utilizzabili dopo le spese previste</div><div class="big num">${eur(c.avanzo)}</div>
+    <div class="sub">Budget del periodo: ${eur(c.disp)} · Spese fisse previste: ${eur(c.fixed)}</div></div>
+    <div class="row"><div><span class="lab">Su carta</span><b class="num">${eur(c.cardNow)}</b></div>
+    <div><span class="lab">Contanti</span><b class="num">${eur(c.cashLeft)}</b></div>
+    <div><span class="lab">Fisse da pagare</span><b class="num">${eur(c.unpaid)}</b></div></div>
+    ${c.afterFixed<0?`<div class="alertbox" role="alert">Attenzione: sulla carta mancano ${eur(-c.afterFixed)} per coprire le spese fisse ancora da pagare.</div>`:`<div class="sub">Dopo le spese fisse non ancora pagate, su carta restano ${eur(c.afterFixed)}.</div>`}
+  </section>
+  <section class="card"><h2>Budget del periodo</h2><div class="grid2">
     <label class="f" for="in-sal">Stipendio<input id="in-sal" inputmode="decimal" data-f="salary" value="${m.salary}"></label>
-    <label class="f" for="in-car">Avanzo periodo precedente<input id="in-car" inputmode="decimal" data-f="carry" value="${m.carry}"></label>
-    <label class="f" for="in-cash">Prelevati in contanti<input id="in-cash" inputmode="decimal" data-f="cash" value="${m.cash}"></label>
-    <label class="f">Disponibile<input value="${eur(c.disp)}" disabled aria-label="Disponibile"></label></div>
-    ${carryNote?`<p class="note">${carryNote}</p>`:''}</section>
-  <section class="card"><h2>Avanzo per categoria</h2>${buds||'<p class="note">Nessuna categoria. Aggiungile dalla scheda Fisse.</p>'}
-    ${m.budgets.length?`<div class="tot"><span>Totale categorie</span><span class="num ${cls(c.restTot)}">${eur(c.restTot)}</span></div>
-    <p class="note">Speso ${eur(c.spentTot)} su ${eur(c.budTot)}. Spese fisse ancora da pagare: ${eur(c.unpaid)} su ${eur(c.fixed)}.</p>`:''}</section>
-  <section class="card"><h2>Chiudi il periodo</h2>
-    <p class="note">Porta l'avanzo attuale (${eur(c.avanzo)}) nel periodo successivo, con le stesse spese fisse e gli stessi budget.</p>
-    <button class="btn" data-a="close">${nextExists?'Vai al periodo successivo':'Chiudi e apri '+esc(periodTitle(nextKey(cur)))}</button></section>`;
+    <label class="f" for="in-car">Avanzo precedente<input id="in-car" inputmode="decimal" data-f="carry" value="${m.carry}"></label>
+    <label class="f" for="in-cash">Trasferiti da carta a contanti<input id="in-cash" inputmode="decimal" data-f="cash" value="${m.cash}"></label>
+    <label class="f">Budget totale disponibile<input value="${eur(c.disp)}" disabled aria-label="Budget totale disponibile"></label></div>
+    ${carryNote?`<p class="note">${carryNote}</p>`:''}
+    <p class="note">Il prelievo è un trasferimento tra carta e contanti, non una spesa aggiuntiva. Le spese vengono conteggiate quando le registri.</p></section>
+  <section class="card"><div class="sectionhead"><h2>Budget per categoria</h2><span class="num">${eur(c.budTot)}</span></div>${buds||'<p class="note">Nessuna categoria. Aggiungile dalla scheda Fisse.</p>'}
+    ${m.budgets.length?`<div class="tot"><span>Residuo dei budget</span><span class="num ${cls(c.restTot)}">${eur(c.restTot)}</span></div>
+    <p class="note">Speso ${eur(c.spentTot)} su ${eur(c.budTot)}. Le spese fisse ancora da pagare sono ${eur(c.unpaid)}.</p>`:''}</section>
+  <section class="card"><div class="sectionhead"><h2>Salvadanaio</h2><span class="num">${eur(savingsTotal)}</span></div>
+    <p class="note">Somma messa da parte nei vari periodi. I trasferimenti al salvadanaio riducono i soldi utilizzabili, senza essere conteggiati come spese.</p>
+    <button class="btn ghost" data-tab="risparmi">Apri salvadanaio</button></section>
+  <section class="card"><h2>Periodo successivo</h2>
+    <p class="note">L'avanzo attuale (${eur(c.avanzo)}) verrà proposto come avanzo del periodo successivo.</p>
+    <button class="btn" data-a="close">${nextExists?'Vai al periodo successivo':'Apri '+esc(periodTitle(nextKey(cur)))}</button></section>`;
 }
 function spese(m,c){
   const opts=m.budgets.map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('')+'<option value="">Altro (fuori categoria)</option>';
@@ -283,6 +297,25 @@ function fisse(m,c){
     <div class="edit head"><span>Nome</span><span>Budget</span><span>Accantona</span><span></span></div>
     ${ed(m.budgets,'budgets')}<button class="btn ghost small" data-a="addi" data-k="budgets">+ Categoria</button></section>`;
 }
+function risparmi(){
+  const m=ensure(cur);
+  const all=Object.values(S.months).flatMap(x=>x.savings||[]);
+  const balance=all.reduce((t,x)=>t+(x.kind==='withdraw'?-1:1)*x.amount,0);
+  const rows=[...(m.savings||[])].reverse().map(x=>`<div class="item"><div class="t"><span>${x.kind==='withdraw'?'Prelievo dal salvadanaio':'Accantonamento'}${x.note?' · '+esc(x.note):''}</span><small>${x.method==='cash'?'Contanti':'Carta'} · ${esc(x.date||'')}</small></div><span class="amt num ${x.kind==='withdraw'?'pos':''}">${x.kind==='withdraw'?'+':'−'}${eur(x.amount)}</span><button class="x" data-a="delsave" data-id="${x.id}" aria-label="Elimina movimento">✕</button></div>`).join('');
+  return`${header()}
+  <section class="hero"><div><div class="lab">Salvadanaio totale</div><div class="big num">${eur(balance)}</div></div>
+    <div class="sub">I movimenti vengono registrati nel periodo selezionato. Puoi accantonare denaro dalla carta o dai contanti.</div></section>
+  <section class="card"><h2>Nuovo movimento</h2>
+    <label class="f" for="sav-amount">Importo (€)<input id="sav-amount" inputmode="decimal" placeholder="0,00"></label>
+    <div class="grid2"><label class="f" for="sav-kind">Operazione<select id="sav-kind"><option value="deposit">Metti da parte</option><option value="withdraw">Riprendi dal salvadanaio</option></select></label>
+    <label class="f" for="sav-method">Da / verso<select id="sav-method"><option value="card">Carta</option><option value="cash">Contanti</option></select></label></div>
+    <label class="f" for="sav-note">Nota (facoltativa)<input id="sav-note" placeholder="es. Vacanze, emergenze…"></label>
+    <button class="btn" data-a="addsave">Registra movimento</button>
+    ${msg?`<p class="note">${esc(msg)}</p>`:''}</section>
+  <section class="card"><h2>Movimenti del periodo</h2><div class="list">${rows||'<p class="note">Nessun movimento nel salvadanaio in questo periodo.</p>'}</div></section>
+  <p class="note">Eliminare un movimento aggiorna anche il saldo del salvadanaio e il saldo della carta o dei contanti associati.</p>`;
+}
+
 function storico(){
   const keys=Object.keys(S.months).sort();
   const data=keys.map(k=>({k,...calc(S.months[k]),m:S.months[k]}));
@@ -410,10 +443,17 @@ function render(){
   if(cloudOn()&&!user){app.innerHTML=loginView();navBox.hidden=true;return}
   navBox.hidden=false;
   app.innerHTML=view();
-  const T=[['riepilogo','Riepilogo'],['spese','Spese'],['fisse','Fisse'],['storico','Storico'],['account','Account']];
+  const T=[['riepilogo','Riepilogo'],['spese','Spese'],['fisse','Fisse'],['risparmi','Salvadanaio'],['storico','Storico'],['account','Account']];
   document.getElementById('nav').innerHTML=T.map(([k,l])=>`<button data-tab="${k}" ${tab===k?'aria-current="true"':''}>${l}</button>`).join('');
 }
-function edit(kind,id,fn){[S.months[cur][kind],S.tpl[kind]].forEach(a=>{const x=a.find(i=>i.id===id);if(x)fn(x)})}
+function edit(kind,id,fn){
+  if(kind==='fixed'){
+    Object.keys(S.months).filter(k=>k>=cur).sort().forEach(k=>{const x=S.months[k].fixed.find(i=>i.id===id);if(x)fn(x)});
+    const t=S.tpl.fixed.find(i=>i.id===id);if(t)fn(t);
+  }else{
+    [S.months[cur][kind],S.tpl[kind]].forEach(a=>{const x=a.find(i=>i.id===id);if(x)fn(x)});
+  }
+}
 document.addEventListener('submit',ev=>{if(ev.target.id==='gate-form'){ev.preventDefault();authAction(gateMode==='signup'?'signup':'login')}});
 document.addEventListener('click',async ev=>{
   const t=ev.target.closest('[data-a],[data-tab]');if(!t)return;
@@ -435,10 +475,24 @@ document.addEventListener('click',async ev=>{
     m.exp.push({id:uid(),desc:document.getElementById('ex-d').value.trim(),amount,cat:document.getElementById('ex-c').value,method,date:new Date().toISOString().slice(0,10)});
     msg='Spesa aggiunta.';save();render();document.getElementById('ex-d').focus();return}
   else if(a==='delexp'){m.exp=m.exp.filter(e=>e.id!==id)}
+  else if(a==='addsave'){
+    const amount=num(val('sav-amount')),kind=val('sav-kind'),method=val('sav-method'),note=val('sav-note').trim();
+    if(amount<=0){msg='Inserisci un importo maggiore di zero.';render();return}
+    const all=Object.values(S.months).flatMap(x=>x.savings||[]);
+    const balance=all.reduce((t,x)=>t+(x.kind==='withdraw'?-1:1)*x.amount,0);
+    if(kind==='withdraw'&&amount>balance){msg='Il prelievo supera il saldo del salvadanaio.';render();return}
+    m.savings=m.savings||[];m.savings.push({id:uid(),amount:r2(amount),kind,method,note,date:new Date().toISOString().slice(0,10)});
+    msg='Movimento registrato.';save();render();return}
+  else if(a==='delsave'){m.savings=(m.savings||[]).filter(x=>x.id!==id)}
   else if(a==='pay'){m.paid[id]=!m.paid[id]}
-  else if(a==='deli'){const k=t.dataset.k;m[k]=m[k].filter(i=>i.id!==id);S.tpl[k]=S.tpl[k].filter(i=>i.id!==id)}
+  else if(a==='deli'){const k=t.dataset.k;
+    if(k==='fixed'){Object.keys(S.months).filter(key=>key>=cur).forEach(key=>S.months[key].fixed=S.months[key].fixed.filter(i=>i.id!==id))}
+    else m[k]=m[k].filter(i=>i.id!==id);
+    S.tpl[k]=S.tpl[k].filter(i=>i.id!==id)}
   else if(a==='addi'){const k=t.dataset.k,it=k==='fixed'?{id:uid(),name:'Nuova spesa',amount:0,day:0}:{id:uid(),name:'Nuova categoria',amount:0,save:false};
-    m[k].push(it);S.tpl[k].push({...it})}
+    if(k==='fixed'){Object.keys(S.months).filter(key=>key>=cur).forEach(key=>S.months[key].fixed.push({...it}))}
+    else m[k].push(it);
+    S.tpl[k].push({...it})}
   else if(a==='copy'){const ta=document.getElementById('bk');ta.value=JSON.stringify(S);ta.select();
     try{await navigator.clipboard.writeText(ta.value);msg='Dati copiati.'}catch(e){msg='Testo selezionato: copialo a mano.'}
     render();document.getElementById('bk').value=JSON.stringify(S);return}
