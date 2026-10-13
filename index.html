@@ -91,6 +91,10 @@ textarea{min-height:90px;font-size:.8rem;font-family:ui-monospace,monospace}
 <div class="wrap" id="app"></div>
 <nav><div class="in" id="nav"></div></nav>
 
+<script src="firebase-app-compat.js"></script>
+<script src="firebase-auth-compat.js"></script>
+<script src="firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
 <script>
 const KEY='spese-mensili-v1';
 const uid=()=>Math.random().toString(36).slice(2,9);
@@ -111,7 +115,8 @@ function seed(){
   return {tpl:{fixed:[],budgets:[]},months:{[k]:{salary:0,carry:0,cash:0,fixed:[],budgets:[],paid:{},exp:[]}}};
 }
 function load(){try{const s=localStorage.getItem(KEY);if(s){const o=JSON.parse(s);if(o&&o.months&&o.tpl)return o}}catch(e){}return seed()}
-function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
+function saveLocal(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
+function save(){S._ts=Date.now();saveLocal();schedulePush()}
 let S=load();
 let cur=mkKey(new Date()),tab='riepilogo',method='card',msg='';
 
@@ -120,7 +125,7 @@ function ensure(k){
   const p=S.months[prevKey(k)];
   S.months[k]={salary:p?p.salary:0,carry:p?r2(calc(p).avanzo):0,cash:0,
     fixed:JSON.parse(JSON.stringify(S.tpl.fixed)),budgets:JSON.parse(JSON.stringify(S.tpl.budgets)),paid:{},exp:[]};
-  save();return S.months[k];
+  saveLocal();return S.months[k];
 }
 function calc(m){
   const disp=m.salary+m.carry,fixed=sum(m.fixed,'amount');
@@ -220,14 +225,100 @@ function storico(){
     <line x1="0" x2="${W}" y1="${zero}" y2="${zero}"/>${bars}</svg></div>
     <p class="note">Somma degli avanzi previsti: <b class="num ${cls(tot)}">${eur(tot)}</b></p></section>
   <section class="card"><h2>Dettaglio</h2><div class="scroll"><table><thead><tr><th>Mese</th><th>Disponibile</th><th>Fisse</th><th>Spese</th><th>Avanzo</th></tr></thead><tbody>${rows}</tbody></table></div></section>
+  ${accountCard()}
   <section class="card"><h2>Copia di sicurezza</h2>
     <p class="note">I dati stanno solo in questo browser. Copia il testo e conservalo (note, mail). Per ripristinare, incollalo qui sotto.</p>
     <div class="grid2"><button class="btn small" data-a="copy">Copia dati</button><button class="btn ghost small" data-a="imp">Ripristina</button></div>
     <textarea id="bk" aria-label="Dati di backup" placeholder="Incolla qui i dati da ripristinare"></textarea>${msg?`<p class="note">${esc(msg)}</p>`:''}</section>`;
 }
 
+
+// ---------- Account e sincronizzazione (Firebase) ----------
+let fb=null,user=null,authReady=false,syncMsg='',unsub=null,pushTimer=null,lastEmail='';
+const cloudOn=()=>typeof firebase!=='undefined'&&typeof FIREBASE_CONFIG!=='undefined'&&!!FIREBASE_CONFIG.apiKey&&!/INCOLLA/.test(FIREBASE_CONFIG.apiKey);
+const hhmm=()=>new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
+const isEditing=()=>{const e=document.activeElement;return !!e&&/^(INPUT|TEXTAREA|SELECT)$/.test(e.tagName)};
+function initCloud(){
+  if(!cloudOn())return;
+  try{
+    firebase.initializeApp(FIREBASE_CONFIG);
+    fb={auth:firebase.auth(),db:firebase.firestore()};
+    fb.db.settings({experimentalAutoDetectLongPolling:true,merge:true});
+    fb.auth.onAuthStateChanged(u=>{
+      user=u;authReady=true;msg='';
+      if(unsub){unsub();unsub=null}
+      if(u)startSync();else render();
+    });
+  }catch(e){authReady=true;fb=null;render()}
+}
+const docRef=()=>fb.db.collection('users').doc(user.uid);
+function startSync(){
+  syncMsg='Connessione…';render();
+  unsub=docRef().onSnapshot(snap=>{
+    if(!snap.exists){
+      if(snap.metadata.fromCache){syncMsg='Offline: modifiche salvate sul dispositivo';refresh();return}
+      push();return;
+    }
+    const d=snap.data(),remoteTs=d.ts||0,localTs=S._ts||0;
+    if(remoteTs>localTs){
+      try{S=JSON.parse(d.state);S._ts=remoteTs;saveLocal();ensure(cur);syncMsg='Sincronizzato alle '+hhmm();refresh()}catch(e){}
+    }else if(localTs>remoteTs){push()}
+    else{syncMsg=snap.metadata.fromCache?'Offline: dati salvati sul dispositivo':'Sincronizzato alle '+hhmm();refresh()}
+  },()=>{syncMsg='Offline: modifiche salvate sul dispositivo';refresh()});
+}
+function refresh(){if(!isEditing())render();else if(tab==='storico'){}}
+function schedulePush(){if(!fb||!user)return;clearTimeout(pushTimer);pushTimer=setTimeout(push,700)}
+function push(){
+  if(!fb||!user)return;
+  if(!S._ts){S._ts=Date.now();saveLocal()}
+  docRef().set({state:JSON.stringify(S),ts:S._ts}).then(()=>{syncMsg='Sincronizzato alle '+hhmm();refresh()}).catch(()=>{syncMsg='Offline: modifiche salvate sul dispositivo';refresh()});
+}
+window.addEventListener('online',()=>{if(fb&&user)push()});
+function authErr(e){
+  const c=(e&&e.code)||'';
+  if(/invalid-credential|wrong-password|user-not-found|invalid-login/.test(c))return'Email o password non corrette.';
+  if(c==='auth/email-already-in-use')return'Esiste già un account con questa email. Usa Accedi.';
+  if(c==='auth/invalid-email')return'Email non valida.';
+  if(c==='auth/weak-password')return'La password deve avere almeno 6 caratteri.';
+  if(c==='auth/network-request-failed')return'Nessuna connessione. Riprova quando sei online.';
+  if(c==='auth/too-many-requests')return'Troppi tentativi. Riprova tra qualche minuto.';
+  return'Errore di accesso'+(c?' ('+c+')':'')+'.';
+}
+function authAction(a){
+  if(!fb)return;
+  if(a==='logout'){fb.auth.signOut();return}
+  const em=document.getElementById('lg-mail').value.trim(),pw=document.getElementById('lg-pw').value;
+  lastEmail=em;
+  if(!em){msg='Inserisci la tua email.';render();return}
+  if(a==='reset'){
+    fb.auth.sendPasswordResetEmail(em).then(()=>{msg='Ti ho inviato una mail per reimpostare la password.';render()}).catch(e=>{msg=authErr(e);render()});return}
+  if(a==='signup'&&pw.length<6){msg='La password deve avere almeno 6 caratteri.';render();return}
+  if(!pw){msg='Inserisci la password.';render();return}
+  msg='Accesso in corso…';render();
+  (a==='signup'?fb.auth.createUserWithEmailAndPassword(em,pw):fb.auth.signInWithEmailAndPassword(em,pw)).catch(e=>{msg=authErr(e);render()});
+}
+function loginView(){
+  return`<div class="top"><h1>Spese Mensili</h1></div>
+  <section class="card"><h2>Accedi</h2>
+    <p class="note">Con l'account ritrovi le tue spese su ogni dispositivo. Al primo accesso scegli Crea account.</p>
+    <label class="f" for="lg-mail">Email<input id="lg-mail" type="email" autocomplete="username" autocapitalize="off" value="${esc(lastEmail)}"></label>
+    <label class="f" for="lg-pw">Password<input id="lg-pw" type="password" autocomplete="current-password"></label>
+    <button class="btn" data-a="login">Accedi</button>
+    <div class="grid2"><button class="btn ghost small" data-a="signup">Crea account</button><button class="btn ghost small" data-a="reset">Password dimenticata</button></div>
+    ${msg?`<p class="note" role="status">${esc(msg)}</p>`:''}</section>`;
+}
+function accountCard(){
+  if(!cloudOn()||!user)return'';
+  return`<section class="card"><h2>Account</h2><p class="note">${esc(user.email||'')}<br>${esc(syncMsg||'')}</p>
+    <button class="btn ghost small" data-a="logout">Esci</button></section>`;
+}
+
 function render(){
-  document.getElementById('app').innerHTML=view();
+  const app=document.getElementById('app'),navBox=document.querySelector('nav');
+  if(cloudOn()&&!authReady){app.innerHTML='<p class="note">Caricamento…</p>';navBox.hidden=true;return}
+  if(cloudOn()&&!user){app.innerHTML=loginView();navBox.hidden=true;return}
+  navBox.hidden=false;
+  app.innerHTML=view();
   const T=[['riepilogo','Riepilogo'],['spese','Spese'],['fisse','Fisse'],['storico','Storico']];
   document.getElementById('nav').innerHTML=T.map(([k,l])=>`<button data-tab="${k}" ${tab===k?'aria-current="true"':''}>${l}</button>`).join('');
 }
@@ -238,6 +329,7 @@ document.addEventListener('click',async ev=>{
   const t=ev.target.closest('[data-a],[data-tab]');if(!t)return;
   if(t.dataset.tab){tab=t.dataset.tab;msg='';render();window.scrollTo(0,0);return}
   const a=t.dataset.a,m=S.months[cur],id=t.dataset.id;
+  if(['login','signup','reset','logout'].includes(a)){authAction(a);return}
   if(a==='prev'){cur=prevKey(cur);ensure(cur)}
   else if(a==='next'){cur=nextKey(cur);ensure(cur)}
   else if(a==='close'){const n=nextKey(cur);ensure(n);cur=n;window.scrollTo(0,0)}
@@ -257,7 +349,7 @@ document.addEventListener('click',async ev=>{
     render();document.getElementById('bk').value=JSON.stringify(S);return}
   else if(a==='imp'){try{const o=JSON.parse(document.getElementById('bk').value);
     if(!o||!o.months||!o.tpl)throw 0;S=o;cur=mkKey(new Date());ensure(cur);msg='Dati ripristinati.'}catch(e){msg='Testo non valido.'}}
-  if(!['m'].includes(a))save();
+  if(!['m','prev','next'].includes(a))save();
   if(a!=='copy'&&a!=='imp')msg=a==='addexp'?msg:'';
   render();
 });
@@ -270,6 +362,7 @@ document.addEventListener('change',ev=>{
   save();render();
 });
 render();
+initCloud();
 if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}))}
 </script>
 
