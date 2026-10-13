@@ -107,6 +107,23 @@ textarea{min-height:90px;font-size:.8rem;font-family:ui-monospace,monospace}
 .pw button{position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:0;color:var(--accent);font-weight:600;cursor:pointer;padding:6px 8px}
 .msg{margin:0;font-size:.88rem;color:var(--bad)}
 .msg.ok{color:var(--good)}
+
+:root{--c-fixed:#6b7f8a;--c-save:#e0a82e;--c-margin:var(--warn)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--c-fixed:#8ea3ae}}
+:root[data-theme="dark"]{--c-fixed:#8ea3ae}
+.lab2{display:block;font-size:.75rem;color:var(--muted);letter-spacing:.03em}
+.big2{font-family:var(--f-display);font-size:2rem;font-weight:700;line-height:1.1}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.tiles b{font-family:var(--f-display);font-size:1.2rem}
+.dist{display:flex;height:14px;border-radius:99px;overflow:hidden;gap:3px;background:var(--soft)}
+.dist i{display:block;height:100%;min-width:0}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.78rem;color:var(--muted)}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--c);margin-right:6px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.two .lab{display:block;font-size:.75rem;color:var(--muted)}
+.two b{font-family:var(--f-display);font-size:1.15rem}
+details{border-top:1px solid var(--line);padding-top:8px}
+summary{cursor:pointer;font-weight:600;color:var(--accent);padding:4px 0}
 </style>
 </head>
 <body>
@@ -117,6 +134,7 @@ textarea{min-height:90px;font-size:.8rem;font-family:ui-monospace,monospace}
 <script src="firebase-firestore-compat.js"></script>
 <script src="firebase-config.js"></script>
 <script>
+const FIRST_KEY='2026-10'; /* l'app parte dal periodo 16 ottobre 2026: niente prima */
 const KEY='spese-mensili-v1';
 const uid=()=>Math.random().toString(36).slice(2,9);
 const eur=n=>new Intl.NumberFormat('it-IT',{style:'currency',currency:'EUR'}).format(n||0);
@@ -131,13 +149,17 @@ const prevKey=k=>{const[y,m]=k.split('-').map(Number);return mkKey(new Date(y,m-
 const monName=(y,m)=>new Date(y,m,1).toLocaleDateString('it-IT',{month:'long'});
 const shortName=k=>{const[y,m]=k.split('-').map(Number);return new Date(y,m-1,1).toLocaleDateString('it-IT',{month:'short'}).replace('.','')};
 const shortDate=d=>d.getDate()+' '+d.toLocaleDateString('it-IT',{month:'short'}).replace('.','');
+const today0=()=>{const t=new Date();t.setHours(0,0,0,0);return t};
+const todayIso=()=>new Date().toISOString().slice(0,10);
 
 /* ---- Periodo: dal giorno dello stipendio (default 16) al giorno prima del mese dopo ---- */
 const startDay=()=>Math.min(28,Math.max(1,(S.settings&&S.settings.startDay)||16));
-function curKey(){const d=new Date(),k=mkKey(d);return d.getDate()>=startDay()?k:prevKey(k)}
+function clampKey(k){return k<FIRST_KEY?FIRST_KEY:k}
+function curKey(){const d=new Date(),k=mkKey(d);return clampKey(d.getDate()>=startDay()?k:prevKey(k))}
 function periodTitle(k){const[y,m]=k.split('-').map(Number);return startDay()===1?monName(y,m-1):monName(y,m-1)+' / '+monName(y,m)}
+function periodEnd(k){const[y,m]=k.split('-').map(Number);return new Date(y,m,startDay()-1)}
 function periodLabel(k){
-  const[y,m]=k.split('-').map(Number),sd=startDay(),a=new Date(y,m-1,sd),b=new Date(y,m,sd-1);
+  const[y,m]=k.split('-').map(Number),a=new Date(y,m-1,startDay()),b=periodEnd(k);
   return shortDate(a)+' – '+shortDate(b)+' '+b.getFullYear();
 }
 function dueDate(f,k){
@@ -148,110 +170,168 @@ function dueDate(f,k){
 }
 
 /* ---- Dati ---- */
+let migrated=false;
 function norm(o){
   o.settings=Object.assign({startDay:16,name:''},o.settings||{});
+  o.piggy=Object.assign({entries:[],pots:[],transfers:[]},o.piggy||{});
+  const P=o.piggy;P.entries=P.entries||[];P.pots=P.pots||[];P.transfers=P.transfers||[];
   const fix=a=>(a||[]).forEach(b=>{if(b.save===undefined)b.save=/da parte|risparm/i.test(b.name)});
-  fix(o.tpl.budgets);Object.values(o.months).forEach(m=>{fix(m.budgets);if(!Array.isArray(m.savings))m.savings=[]});
+  fix(o.tpl.budgets);
+  Object.keys(o.months).forEach(k=>{
+    const m=o.months[k];fix(m.budgets);
+    /* vecchi movimenti del salvadanaio, registrati per periodo: passano nel salvadanaio unico */
+    if(Array.isArray(m.savings)&&m.savings.length){
+      const old=k<FIRST_KEY;
+      m.savings.forEach(x=>P.entries.push({id:x.id||uid(),date:x.date||'',amount:r2((x.kind==='withdraw'?-1:1)*(+x.amount||0)),
+        note:x.note||'',k:old?FIRST_KEY:k,method:old?'none':(x.method||'card'),pot:null,type:'manual'}));
+      migrated=true}
+    if('savings' in m){delete m.savings;migrated=true}
+    delete m.carryAuto;
+    if(k<FIRST_KEY){delete o.months[k];migrated=true}
+  });
   return o;
 }
 function seed(){
-  const k=mkKey(new Date());
-  return norm({tpl:{fixed:[],budgets:[]},months:{[curKeyFor(k)]:{salary:0,carry:0,cash:0,fixed:[],budgets:[],paid:{},exp:[]}}});
+  const d=new Date(),k=mkKey(d),key=clampKey(d.getDate()>=16?k:prevKey(k));
+  return norm({tpl:{fixed:[],budgets:[]},months:{[key]:{salary:0,carry:0,cash:0,fixed:[],budgets:[],paid:{},exp:[]}}});
 }
-function curKeyFor(k){const d=new Date();return d.getDate()>=16?k:prevKey(k)}
 function load(){try{const s=localStorage.getItem(KEY);if(s){const o=JSON.parse(s);if(o&&o.months&&o.tpl)return norm(o)}}catch(e){}return seed()}
 function saveLocal(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
 function save(){S._ts=Date.now();saveLocal();schedulePush()}
 let S=load();
-let cur=curKey(),tab='riepilogo',method='card',msg='',gateMode='login',lastEmail='',lastName='';
+if(migrated){S._ts=Date.now();saveLocal()}
+let cur=curKey(),tab='riepilogo',method='card',msg='',closing=false,gateMode='login',lastEmail='',lastName='';
 
 function ensure(k){
   if(S.months[k])return S.months[k];
   const p=S.months[prevKey(k)];
-  S.months[k]={salary:p?p.salary:0,carry:0,carryAuto:!!p,cash:0,fixed:clone(S.tpl.fixed),budgets:clone(S.tpl.budgets),paid:{},exp:[],savings:[]};
-  if(p)S.months[k].carry=r2(calc(p).avanzo);
+  S.months[k]={salary:p?p.salary:0,carry:p&&p.closed?p.closed.carried:0,cash:0,fixed:clone(S.tpl.fixed),budgets:clone(S.tpl.budgets),paid:{},exp:[]};
   saveLocal();return S.months[k];
 }
-function syncCarry(k){
-  const m=S.months[k],pk=prevKey(k),p=S.months[pk];
-  if(!m||!p)return;
-  syncCarry(pk);
-  if(m.carryAuto){const v=r2(calc(p).avanzo);if(v!==m.carry){m.carry=v;saveLocal()}}
-}
-function calc(m){
+function calc(m,k){
   const disp=m.salary+m.carry,fixed=sum(m.fixed,'amount');
   const paidFixed=m.fixed.filter(f=>m.paid[f.id]).reduce((t,f)=>t+f.amount,0);
   const spent={};let extra=0,cashSp=0,cardSp=0;
   m.exp.forEach(e=>{
     if(e.cat&&m.budgets.some(b=>b.id===e.cat))spent[e.cat]=(spent[e.cat]||0)+e.amount;else extra+=e.amount;
     if(e.method==='cash')cashSp+=e.amount;else cardSp+=e.amount;});
-  let planned=extra,actual=extra,restTot=0,spentTot=0,budTot=0;
+  let usable=0,usableSpent=0,liveFull=0,saveAmt=0,savePlan=0,saveSpent=0,restTot=0,spentTot=0,budTot=0;
   m.budgets.forEach(b=>{const s=spent[b.id]||0;
-    planned+=Math.max(b.amount,s);
-    actual+=b.save?Math.max(b.amount,s):s;
-    restTot+=b.amount-s;spentTot+=s;budTot+=b.amount});
-  const sav=m.savings||[];
-  const savCardNet=sum(sav.filter(x=>x.method==='card').map(x=>({v:(x.kind==='withdraw'?-1:1)*x.amount})),'v');
-  const savCashNet=sum(sav.filter(x=>x.method==='cash').map(x=>({v:(x.kind==='withdraw'?-1:1)*x.amount})),'v');
-  const savingsNet=sum(sav.map(x=>({v:(x.kind==='withdraw'?-1:1)*x.amount})),'v');
-  const cardNow=disp-paidFixed-m.cash-cardSp-savCardNet,unpaid=fixed-paidFixed;
-  const cashLeft=m.cash-cashSp-savCashNet;
-  return{disp,fixed,paidFixed,unpaid,spent,extra,cashSp,cardSp,cardNow,cashLeft,
-    afterFixed:cardNow-unpaid,avanzo:disp-fixed-actual-savingsNet,previsto:disp-fixed-planned,
-    restTot,spentTot,budTot,savingsNet,savCardNet,savCashNet};
+    restTot+=b.amount-s;spentTot+=s;budTot+=b.amount;
+    if(b.save){saveAmt+=b.amount;saveSpent+=s;savePlan+=Math.max(b.amount,s)}
+    else{usable+=b.amount;usableSpent+=s;liveFull+=Math.max(b.amount,s)}});
+  const man=S.piggy.entries.filter(e=>e.k===k&&e.type==='manual');
+  const manNet=sum(man.filter(e=>e.method!=='none'),'amount'),manCard=sum(man.filter(e=>e.method==='card'),'amount'),manCash=sum(man.filter(e=>e.method==='cash'),'amount');
+  /* soldi utilizzabili dopo le spese previste: stipendio e avanzo, meno fisse, meno quanto va nel salvadanaio, meno spese fuori categoria */
+  const afterPlanned=disp-fixed-savePlan-extra-manNet;
+  const cardNow=disp-paidFixed-m.cash-cardSp-manCard,unpaid=fixed-paidFixed,cashLeft=m.cash-cashSp-manCash;
+  return{disp,fixed,paidFixed,unpaid,spent,extra,cashSp,cardSp,cardNow,cashLeft,afterFixed:cardNow-unpaid,
+    usable,usableSpent,saveAmt,savePlan,saveSpent,afterPlanned,margin:afterPlanned-usable,
+    avanzo:afterPlanned-usableSpent,previsto:afterPlanned-liveFull,restTot,spentTot,budTot,manNet};
 }
 const cls=n=>n<0?'neg':'pos';
 const val=id=>{const e=document.getElementById(id);return e?e.value:''};
 
+/* ---- Salvadanaio ---- */
+function piggyAuto(k){
+  const m=S.months[k];if(!m)return 0;
+  const sp={};m.exp.forEach(e=>{if(e.cat)sp[e.cat]=(sp[e.cat]||0)+e.amount});
+  return m.budgets.filter(b=>b.save).reduce((t,b)=>t+b.amount-(sp[b.id]||0),0);
+}
+function piggyInfo(){
+  const P=S.piggy,keys=Object.keys(S.months).filter(k=>k<=curKey()).sort();
+  const auto=keys.map(k=>({k,v:r2(piggyAuto(k))}));
+  const autoTot=sum(auto,'v'),manual=sum(P.entries,'amount'),total=autoTot+manual;
+  const bal={};P.pots.forEach(p=>{bal[p.id]=0});
+  P.entries.forEach(e=>{if(e.pot&&bal[e.pot]!==undefined)bal[e.pot]+=e.amount});
+  P.transfers.forEach(t=>{if(bal[t.to]!==undefined)bal[t.to]+=t.amount;if(bal[t.from]!==undefined)bal[t.from]-=t.amount});
+  const potsTot=Object.values(bal).reduce((a,b)=>a+b,0);
+  return{auto,autoTot,manual,total,bal,general:total-potsTot};
+}
+
 /* ---- Schermate ---- */
 function header(){
   const hello=S.settings.name?'Ciao '+S.settings.name+' · ':'';
-  return`<div class="top"><button class="iconbtn" data-a="prev" aria-label="Periodo precedente">‹</button>
+  const first=cur<=FIRST_KEY;
+  return`<div class="top"><button class="iconbtn" data-a="prev" aria-label="Periodo precedente" ${first?'disabled style="opacity:.35;cursor:default"':''}>‹</button>
     <div class="ttl"><h1>${esc(periodTitle(cur))}</h1><small>${esc(hello)}${esc(periodLabel(cur))}</small></div>
     <button class="iconbtn" data-a="next" aria-label="Periodo successivo">›</button></div>
     ${cur!==curKey()?'<button class="btn ghost small" data-a="today">Torna al periodo attuale</button>':''}`;
 }
 function view(){
-  const m=ensure(cur);syncCarry(cur);const c=calc(m);
+  const m=ensure(cur);const c=calc(m,cur);
   if(tab==='storico')return storico();
-  if(tab==='risparmi')return risparmi();
   if(tab==='account')return account();
+  if(tab==='risparmi')return header()+risparmi(m,c);
   if(tab==='spese')return header()+spese(m,c);
   if(tab==='fisse')return header()+fisse(m,c);
   return header()+riepilogo(m,c);
 }
-function riepilogo(m,c){
-  const buds=m.budgets.map(b=>{const s=c.spent[b.id]||0,rest=b.amount-s,p=b.amount?Math.min(100,s/b.amount*100):0;
-    return`<div class="bud"><div class="h"><span>${esc(b.name)}</span><span class="num">${eur(s)} <small>/ ${eur(b.amount)}</small></span></div>
+function budRow(b,c){
+  const s=c.spent[b.id]||0,rest=b.amount-s,p=b.amount?Math.min(100,s/b.amount*100):0;
+  return`<div class="bud"><div class="h"><span>${esc(b.name)}</span><span class="num">${eur(s)} <small>/ ${eur(b.amount)}</small></span></div>
     <div class="bar"><i class="${s>b.amount?'over':''}" style="width:${p}%"></i></div>
-    <div class="h"><small>${b.save?'Accantonato per intero':'Conta solo quanto spendi'}</small>
-    <b class="num ${rest<0?'neg':'pos'}">${rest<0?'Sforato di '+eur(-rest):'Residuo '+eur(rest)}</b></div></div>`}).join('');
-  const nextExists=!!S.months[nextKey(cur)];
-  const carryNote=m.carryAuto?'Aggiornato in automatico':(S.months[prevKey(cur)]?'<button class="linkbtn" data-a="carryauto">Usa l\'avanzo automatico</button>':'');
-  const savingsTotal=Object.values(S.months).reduce((t,x)=>t+sum((x.savings||[]).map(v=>({v:(v.kind==='withdraw'?-1:1)*v.amount})),'v'),0);
+    <div class="h"><small>${b.save?'Va nel salvadanaio':'Da spendere'}</small>
+    <b class="num ${rest<0?'neg':'pos'}">${rest<0?'Sforato di '+eur(-rest):'Residuo '+eur(rest)}</b></div></div>`;
+}
+function riepilogo(m,c){
+  const living=m.budgets.filter(b=>!b.save),saves=m.budgets.filter(b=>b.save);
+  const pig=piggyInfo();
+  const sortedFixed=[...m.fixed].sort((a,b)=>{const x=dueDate(a,cur),y=dueDate(b,cur);return (x?x.getTime():9e15)-(y?y.getTime():9e15)});
+  const seg=(v,col)=>v>0.004?`<i style="flex:${v};background:${col}"></i>`:'';
+  const dist=`<div class="dist" role="img" aria-label="Distribuzione dello stipendio">${seg(c.fixed,'var(--c-fixed)')}${seg(c.savePlan,'var(--c-save)')}${seg(c.usable,'var(--accent)')}${seg(c.margin,'var(--c-margin)')}</div>
+    <div class="legend"><span style="--c:var(--c-fixed)">Spese fisse</span><span style="--c:var(--c-save)">Salvadanaio</span><span style="--c:var(--accent)">Vivere</span><span style="--c:var(--c-margin)">Margine</span></div>`;
+  const over=c.margin<-0.004?`<div class="alertbox" role="alert">Hai assegnato ${eur(-c.margin)} in più di quello che hai a disposizione. Riduci un budget o una voce da mettere da parte.</div>`:'';
+  const fixedList=sortedFixed.map(f=>{const d=dueDate(f,cur);
+    return`<div class="item"><div class="t"><span>${esc(f.name)}</span><small>${d?'Entro il '+shortDate(d):'Data libera'}</small></div><span class="amt num">${eur(f.amount)}</span></div>`}).join('');
+  const budList=[...living,...saves].map(b=>`<div class="item"><div class="t"><span>${esc(b.name)}</span><small>${b.save?'Va nel salvadanaio':'Budget per vivere'}</small></div><span class="amt num">${eur(b.amount)}</span></div>`).join('');
+  const closeCard=m.closed
+    ?`<section class="card"><h2>Periodo chiuso</h2>
+      <div class="two"><div><span class="lab">Al salvadanaio</span><b class="num">${eur(m.closed.toPiggy)}</b></div><div><span class="lab">Riportati</span><b class="num">${eur(m.closed.carried)}</b></div></div>
+      <button class="btn ghost small" data-a="reopen">Riapri il periodo</button></section>`
+    :closing?`<section class="card"><h2>Chiudi il periodo</h2>
+      <p class="note">Avanzo attuale: <b class="num">${eur(c.avanzo)}</b>. Scegli quanto metterne nel salvadanaio e quanto riportare nel periodo successivo.</p>
+      ${c.avanzo>0.004?`<label class="f" for="cl-pig">Al salvadanaio (€)<input id="cl-pig" inputmode="decimal" value="0" data-max="${r2(c.avanzo)}"></label>
+      <div class="tot"><span>Riportati al periodo successivo</span><b class="num" id="cl-carry">${eur(c.avanzo)}</b></div>
+      <div class="grid2"><button class="btn ghost small" data-a="clfill" data-v="${r2(c.avanzo)}">Tutto al salvadanaio</button><button class="btn ghost small" data-a="clfill" data-v="0">Tutto riportato</button></div>`
+      :`<p class="note">L'avanzo non è positivo: viene riportato così com'è (${eur(c.avanzo)}).</p><input type="hidden" id="cl-pig" value="0" data-max="0">`}
+      <div class="grid2"><button class="btn" data-a="closeconfirm">Conferma chiusura</button><button class="btn ghost" data-a="closecancel">Annulla</button></div></section>`
+    :`<section class="card"><h2>Chiudi il periodo</h2>
+      <p class="note">A fine periodo decidi quanto dell'avanzo (${eur(c.avanzo)}) va nel salvadanaio e quanto riporti nel periodo successivo.</p>
+      <button class="btn" data-a="closestart">Chiudi il periodo</button></section>`;
   return`<section class="hero"><div><div class="lab">Soldi utilizzabili dopo le spese previste</div><div class="big num">${eur(c.avanzo)}</div>
-    <div class="sub">Budget del periodo: ${eur(c.disp)} · Spese fisse previste: ${eur(c.fixed)}</div></div>
+    <div class="sub num">Disponibile ${eur(c.disp)} · Fisse ${eur(c.fixed)} · Salvadanaio ${eur(c.savePlan)}</div></div>
     <div class="row"><div><span class="lab">Su carta</span><b class="num">${eur(c.cardNow)}</b></div>
     <div><span class="lab">Contanti</span><b class="num">${eur(c.cashLeft)}</b></div>
     <div><span class="lab">Fisse da pagare</span><b class="num">${eur(c.unpaid)}</b></div></div>
     ${c.afterFixed<0?`<div class="alertbox" role="alert">Attenzione: sulla carta mancano ${eur(-c.afterFixed)} per coprire le spese fisse ancora da pagare.</div>`:`<div class="sub">Dopo le spese fisse non ancora pagate, su carta restano ${eur(c.afterFixed)}.</div>`}
   </section>
-  <section class="card"><h2>Budget del periodo</h2><div class="grid2">
-    <label class="f" for="in-sal">Stipendio<input id="in-sal" inputmode="decimal" data-f="salary" value="${m.salary}"></label>
-    <label class="f" for="in-car">Avanzo precedente<input id="in-car" inputmode="decimal" data-f="carry" value="${m.carry}"></label>
+  <section class="card"><h2>Il mio mese</h2>
+    <div class="grid2"><label class="f" for="in-sal">Stipendio<input id="in-sal" inputmode="decimal" data-f="salary" value="${m.salary}"></label>
+    <label class="f" for="in-car">Avanzo periodo precedente<input id="in-car" inputmode="decimal" data-f="carry" value="${m.carry}"></label></div>
+    <div><span class="lab2">Disponibile nel periodo</span><div class="big2 num">${eur(c.disp)}</div></div>
+    <div class="tiles">
+      <div><span class="lab2">Spese fisse</span><b class="num">${eur(c.fixed)}</b></div>
+      <div><span class="lab2">Salvadanaio</span><b class="num">${eur(c.savePlan)}</b></div>
+      <div><span class="lab2">Budget per vivere</span><b class="num">${eur(c.usable)}</b></div>
+      <div><span class="lab2">Margine residuo</span><b class="num ${cls(c.margin)}">${eur(c.margin)}</b></div></div>
+    ${dist}${over}
+    <p class="note">Il margine è quello che resta da assegnare dopo spese fisse, salvadanaio e budget per vivere. Modifica i budget dalla scheda Fisse.</p>
+    <details><summary>Dettaglio spese fisse (${m.fixed.length})</summary><div class="list">${fixedList||'<p class="note">Nessuna spesa fissa.</p>'}</div></details>
+    <details><summary>Dettaglio budget e salvadanaio</summary><div class="list">${budList||'<p class="note">Nessuna categoria.</p>'}</div></details></section>
+  <section class="card"><h2>Contanti</h2>
     <label class="f" for="in-cash">Trasferiti da carta a contanti<input id="in-cash" inputmode="decimal" data-f="cash" value="${m.cash}"></label>
-    <label class="f">Budget totale disponibile<input value="${eur(c.disp)}" disabled aria-label="Budget totale disponibile"></label></div>
-    ${carryNote?`<p class="note">${carryNote}</p>`:''}
-    <p class="note">Il prelievo è un trasferimento tra carta e contanti, non una spesa aggiuntiva. Le spese vengono conteggiate quando le registri.</p></section>
-  <section class="card"><div class="sectionhead"><h2>Budget per categoria</h2><span class="num">${eur(c.budTot)}</span></div>${buds||'<p class="note">Nessuna categoria. Aggiungile dalla scheda Fisse.</p>'}
-    ${m.budgets.length?`<div class="tot"><span>Residuo dei budget</span><span class="num ${cls(c.restTot)}">${eur(c.restTot)}</span></div>
-    <p class="note">Speso ${eur(c.spentTot)} su ${eur(c.budTot)}. Le spese fisse ancora da pagare sono ${eur(c.unpaid)}.</p>`:''}</section>
-  <section class="card"><div class="sectionhead"><h2>Salvadanaio</h2><span class="num">${eur(savingsTotal)}</span></div>
-    <p class="note">Somma messa da parte nei vari periodi. I trasferimenti al salvadanaio riducono i soldi utilizzabili, senza essere conteggiati come spese.</p>
+    <p class="note">È un trasferimento tra carta e contanti, non una spesa. Le spese contano quando le registri.</p></section>
+  <section class="card"><div class="sectionhead"><h2>Budget per vivere</h2><span class="num">${eur(c.usable)}</span></div>
+    ${living.map(b=>budRow(b,c)).join('')||'<p class="note">Nessuna categoria. Aggiungile dalla scheda Fisse.</p>'}
+    ${living.length?`<div class="tot"><span>Residuo</span><span class="num ${cls(c.usable-c.usableSpent)}">${eur(c.usable-c.usableSpent)}</span></div>`:''}</section>
+  ${saves.length?`<section class="card"><div class="sectionhead"><h2>Da mettere da parte</h2><span class="num">${eur(c.savePlan)}</span></div>
+    ${saves.map(b=>budRow(b,c)).join('')}
+    <p class="note">Questi importi vanno nel salvadanaio in automatico. Se spendi da queste categorie, il salvadanaio scende di pari importo.</p></section>`:''}
+  <section class="card"><div class="sectionhead"><h2>Salvadanaio</h2><span class="num">${eur(pig.total)}</span></div>
+    <p class="note">In questo periodo: ${eur(piggyAuto(cur))} da "Da parte". Da suddividere: ${eur(pig.general)}.</p>
     <button class="btn ghost" data-tab="risparmi">Apri salvadanaio</button></section>
-  <section class="card"><h2>Periodo successivo</h2>
-    <p class="note">L'avanzo attuale (${eur(c.avanzo)}) verrà proposto come avanzo del periodo successivo.</p>
-    <button class="btn" data-a="close">${nextExists?'Vai al periodo successivo':'Apri '+esc(periodTitle(nextKey(cur)))}</button></section>`;
+  ${closeCard}`;
 }
 function spese(m,c){
   const opts=m.budgets.map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('')+'<option value="">Altro (fuori categoria)</option>';
@@ -274,8 +354,7 @@ function dueText(f,m){
   if(!d)return m.paid[f.id]?'Pagata':'Data libera';
   if(m.paid[f.id])return'Pagata · '+shortDate(d);
   if(cur!==curKey())return'Entro il '+shortDate(d);
-  const t=new Date();t.setHours(0,0,0,0);
-  const diff=Math.round((d-t)/864e5);
+  const diff=Math.round((d-today0())/864e5);
   return diff<0?`Scaduta da ${-diff} gg`:diff===0?'Scade oggi':`Il ${shortDate(d)} · tra ${diff} gg`;
 }
 function fisse(m,c){
@@ -285,7 +364,7 @@ function fisse(m,c){
   const ed=(arr,kind)=>arr.map(x=>`<div class="edit"><input data-k="${kind}" data-id="${x.id}" data-p="name" value="${esc(x.name)}" aria-label="Nome">
     <input data-k="${kind}" data-id="${x.id}" data-p="amount" inputmode="decimal" value="${x.amount}" aria-label="Importo">
     ${kind==='fixed'?`<input data-k="${kind}" data-id="${x.id}" data-p="day" inputmode="numeric" value="${x.day||''}" placeholder="gg" aria-label="Giorno del mese">`
-      :`<input type="checkbox" data-k="${kind}" data-id="${x.id}" data-p="save" ${x.save?'checked':''} aria-label="Accantona per intero">`}
+      :`<input type="checkbox" data-k="${kind}" data-id="${x.id}" data-p="save" ${x.save?'checked':''} aria-label="Da mettere da parte">`}
     <button class="x" data-a="deli" data-k="${kind}" data-id="${x.id}" aria-label="Rimuovi">✕</button></div>`).join('');
   return`<section class="card"><h2>Da pagare in questo periodo</h2><div class="list">${rows||'<p class="note">Nessuna spesa fissa. Aggiungile qui sotto.</p>'}</div>
     <p class="note">Pagate ${eur(c.paidFixed)} · restano ${eur(c.unpaid)}</p></section>
@@ -293,32 +372,56 @@ function fisse(m,c){
     <div class="edit head"><span>Nome</span><span>Importo</span><span>Giorno</span><span></span></div>
     ${ed(m.fixed,'fixed')}<button class="btn ghost small" data-a="addi" data-k="fixed">+ Spesa fissa</button></section>
   <section class="card"><h2>Modifica categorie</h2>
-    <p class="note">Spunta "Accantona" per le categorie che metti da parte per intero (come "Da parte"). Le altre contano nell'avanzo solo per quanto spendi.</p>
-    <div class="edit head"><span>Nome</span><span>Budget</span><span>Accantona</span><span></span></div>
+    <p class="note">Spunta "Da parte" per le categorie che vanno nel salvadanaio: l'importo viene versato in automatico ogni periodo e tolto dai soldi utilizzabili. Le altre sono i budget per vivere.</p>
+    <div class="edit head"><span>Nome</span><span>Budget</span><span>Da parte</span><span></span></div>
     ${ed(m.budgets,'budgets')}<button class="btn ghost small" data-a="addi" data-k="budgets">+ Categoria</button></section>`;
 }
-function risparmi(){
-  const m=ensure(cur);
-  const all=Object.values(S.months).flatMap(x=>x.savings||[]);
-  const balance=all.reduce((t,x)=>t+(x.kind==='withdraw'?-1:1)*x.amount,0);
-  const rows=[...(m.savings||[])].reverse().map(x=>`<div class="item"><div class="t"><span>${x.kind==='withdraw'?'Prelievo dal salvadanaio':'Accantonamento'}${x.note?' · '+esc(x.note):''}</span><small>${x.method==='cash'?'Contanti':'Carta'} · ${esc(x.date||'')}</small></div><span class="amt num ${x.kind==='withdraw'?'pos':''}">${x.kind==='withdraw'?'+':'−'}${eur(x.amount)}</span><button class="x" data-a="delsave" data-id="${x.id}" aria-label="Elimina movimento">✕</button></div>`).join('');
-  return`${header()}
-  <section class="hero"><div><div class="lab">Salvadanaio totale</div><div class="big num">${eur(balance)}</div></div>
-    <div class="sub">I movimenti vengono registrati nel periodo selezionato. Puoi accantonare denaro dalla carta o dai contanti.</div></section>
+function risparmi(m,c){
+  const P=S.piggy,pig=piggyInfo();
+  const potName=id=>id?((P.pots.find(p=>p.id===id)||{}).name||'—'):'Generale';
+  const potOpts=(sel)=>'<option value="general">Generale</option>'+P.pots.map(p=>`<option value="${p.id}" ${sel===p.id?'selected':''}>${esc(p.name)}</option>`).join('');
+  const potRows=P.pots.map(p=>{const b=pig.bal[p.id]||0,g=+p.goal||0,pc=g?Math.max(0,Math.min(100,b/g*100)):0;
+    return`<div class="bud"><div class="h"><span>${esc(p.name)}</span><b class="num">${eur(b)}</b></div>
+    ${g?`<div class="bar"><i style="width:${pc}%"></i></div><small class="num">Obiettivo ${eur(g)} · ${Math.round(pc)}%</small>`:''}
+    <div class="edit" style="grid-template-columns:1fr 96px 32px"><input data-pot="name" data-id="${p.id}" value="${esc(p.name)}" aria-label="Nome">
+    <input data-pot="goal" data-id="${p.id}" inputmode="decimal" value="${g||''}" placeholder="Obiettivo" aria-label="Obiettivo">
+    <button class="x" data-a="delpot" data-id="${p.id}" aria-label="Elimina salvadanaio">✕</button></div></div>`}).join('');
+  const periodMoves=P.entries.filter(e=>e.k===cur).reverse().map(e=>`<div class="item"><div class="t"><span>${e.type==='avanzo'?esc(e.note||'Avanzo'):(e.amount<0?'Prelievo':'Versamento')+(e.note?' · '+esc(e.note):'')}</span>
+    <small>${potName(e.pot)} · ${e.type==='avanzo'?'dall\'avanzo':e.method==='cash'?'contanti':e.method==='card'?'carta':'senza toccare carta o contanti'}${e.date?' · '+shortDate(new Date(e.date+'T12:00:00')):''}</small></div>
+    <span class="amt num ${e.amount<0?'neg':'pos'}">${e.amount>0?'+':''}${eur(e.amount)}</span>${e.type==='avanzo'?'':`<button class="x" data-a="delsave" data-id="${e.id}" aria-label="Elimina movimento">✕</button>`}</div>`).join('');
+  const autoRows=pig.auto.map(a=>`<div class="item"><div class="t"><span>Da parte · ${esc(periodTitle(a.k))}</span><small>Automatico</small></div><span class="amt num ${a.v<0?'neg':''}">${a.v>0?'+':''}${eur(a.v)}</span></div>`).join('');
+  const trRows=[...P.transfers].reverse().slice(0,10).map(t=>`<div class="item"><div class="t"><span>${esc(potName(t.from==='general'?null:t.from))} → ${esc(potName(t.to==='general'?null:t.to))}</span><small>${t.date?shortDate(new Date(t.date+'T12:00:00')):''}</small></div>
+    <span class="amt num">${eur(t.amount)}</span><button class="x" data-a="deltr" data-id="${t.id}" aria-label="Annulla spostamento">✕</button></div>`).join('');
+  return`<section class="hero"><div><div class="lab">Salvadanaio totale</div><div class="big num">${eur(pig.total)}</div></div>
+    <div class="row"><div><span class="lab">Generale</span><b class="num">${eur(pig.general)}</b></div>
+    <div><span class="lab">Suddiviso</span><b class="num">${eur(pig.total-pig.general)}</b></div>
+    <div><span class="lab">Questo periodo</span><b class="num">${eur(piggyAuto(cur))}</b></div></div>
+    <div class="sub">I soldi segnati "Da parte" in Fisse arrivano qui da soli. Dentro puoi suddividerli per scopo.</div></section>
+  <section class="card"><h2>Suddivisione</h2>
+    <div class="bud"><div class="h"><span>Generale (da suddividere)</span><b class="num">${eur(pig.general)}</b></div></div>
+    ${potRows||'<p class="note">Nessun salvadanaio per scopo. Creane uno qui sotto, per esempio Emergenze o Vacanze.</p>'}
+    <div class="grid2"><label class="f" for="pot-name">Nuovo scopo<input id="pot-name" placeholder="es. Vacanze"></label>
+    <label class="f" for="pot-goal">Obiettivo (€, facoltativo)<input id="pot-goal" inputmode="decimal" placeholder="0"></label></div>
+    <button class="btn ghost small" data-a="addpot">+ Aggiungi scopo</button></section>
+  <section class="card"><h2>Sposta tra scopi</h2>
+    <div class="grid2"><label class="f" for="tr-from">Da<select id="tr-from">${potOpts('general')}</select></label>
+    <label class="f" for="tr-to">A<select id="tr-to">${potOpts('')}</select></label></div>
+    <label class="f" for="tr-amount">Importo (€)<input id="tr-amount" inputmode="decimal" placeholder="0,00"></label>
+    <button class="btn" data-a="transfer">Sposta</button>${trRows?`<div class="list">${trRows}</div>`:''}</section>
   <section class="card"><h2>Nuovo movimento</h2>
     <label class="f" for="sav-amount">Importo (€)<input id="sav-amount" inputmode="decimal" placeholder="0,00"></label>
     <div class="grid2"><label class="f" for="sav-kind">Operazione<select id="sav-kind"><option value="deposit">Metti da parte</option><option value="withdraw">Riprendi dal salvadanaio</option></select></label>
-    <label class="f" for="sav-method">Da / verso<select id="sav-method"><option value="card">Carta</option><option value="cash">Contanti</option></select></label></div>
-    <label class="f" for="sav-note">Nota (facoltativa)<input id="sav-note" placeholder="es. Vacanze, emergenze…"></label>
-    <button class="btn" data-a="addsave">Registra movimento</button>
-    ${msg?`<p class="note">${esc(msg)}</p>`:''}</section>
-  <section class="card"><h2>Movimenti del periodo</h2><div class="list">${rows||'<p class="note">Nessun movimento nel salvadanaio in questo periodo.</p>'}</div></section>
-  <p class="note">Eliminare un movimento aggiorna anche il saldo del salvadanaio e il saldo della carta o dei contanti associati.</p>`;
+    <label class="f" for="sav-pot">Scopo<select id="sav-pot">${potOpts('general')}</select></label></div>
+    <label class="f" for="sav-method">Da / verso<select id="sav-method"><option value="card">Carta</option><option value="cash">Contanti</option><option value="none">Nessuno</option></select></label>
+    <label class="f" for="sav-note">Nota (facoltativa)<input id="sav-note" placeholder="es. Regalo"></label>
+    <button class="btn" data-a="addsave">Registra movimento</button>${msg?`<p class="note">${esc(msg)}</p>`:''}
+    <p class="note">Un movimento in più rispetto al "Da parte" automatico riduce i soldi utilizzabili. "Nessuno" lo registra senza toccare carta o contanti.</p></section>
+  <section class="card"><h2>Movimenti del periodo</h2><div class="list">${periodMoves||'<p class="note">Nessun movimento manuale in questo periodo.</p>'}</div></section>
+  <section class="card"><h2>Versamenti automatici</h2><div class="list">${autoRows||'<p class="note">Nessun versamento.</p>'}</div></section>`;
 }
-
 function storico(){
   const keys=Object.keys(S.months).sort();
-  const data=keys.map(k=>({k,...calc(S.months[k]),m:S.months[k]}));
+  const data=keys.map(k=>({k,...calc(S.months[k],k),m:S.months[k]}));
   const W=Math.max(300,data.length*64),H=160,pad=24,mx=Math.max(1,...data.map(d=>Math.abs(d.avanzo))),zero=H/2;
   const bars=data.map((d,i)=>{const h=Math.abs(d.avanzo)/mx*(H/2-pad),x=i*64+16,y=d.avanzo>=0?zero-h:zero;
     return`<rect class="${d.avanzo>=0?'b':'n'}" x="${x}" y="${y}" width="32" height="${Math.max(1,h)}" rx="4"/>
@@ -344,12 +447,9 @@ function account(){
     :`<p class="note">${cloudOn()?'':'La sincronizzazione online non è attiva: i dati restano su questo dispositivo.'}</p>`}</section>
   <section class="card"><h2>Periodo di spesa</h2>
     <label class="f" for="acc-day">Giorno dello stipendio<input id="acc-day" data-s="startDay" inputmode="numeric" value="${startDay()}"></label>
-    <p class="note">Ogni periodo va dal giorno ${startDay()} al giorno ${startDay()===1?'ultimo':startDay()-1} del mese dopo. Valori da 1 a 28.</p></section>
-  <section class="card"><h2>Copia di sicurezza</h2>
-    <p class="note">Copia il testo e conservalo in un posto tuo. Per ripristinare, incollalo qui sotto.</p>
-    <div class="grid2"><button class="btn small" data-a="copy">Copia dati</button><button class="btn ghost small" data-a="imp">Ripristina</button></div>
-    <textarea id="bk" aria-label="Dati di backup" placeholder="Incolla qui i dati da ripristinare"></textarea>${msg?`<p class="note">${esc(msg)}</p>`:''}</section>`;
+    <p class="note">Ogni periodo va dal giorno ${startDay()} al giorno ${startDay()===1?'ultimo':startDay()-1} del mese dopo. Valori da 1 a 28.</p></section>`;
 }
+
 
 /* ---- Account e sincronizzazione (Firebase) ---- */
 let fb=null,user=null,authReady=false,syncMsg='',unsub=null,pushTimer=null;
@@ -379,7 +479,7 @@ function startSync(){
     }
     const d=snap.data(),remoteTs=d.ts||0,localTs=S._ts||0;
     if(remoteTs>localTs){
-      try{S=norm(JSON.parse(d.state));S._ts=remoteTs;saveLocal();cur=S.months[cur]?cur:curKey();ensure(cur);syncMsg='Sincronizzato alle '+hhmm();refresh()}catch(e){}
+      try{S=norm(JSON.parse(d.state));S._ts=remoteTs;if(migrated){migrated=false;S._ts=Date.now()}saveLocal();cur=S.months[cur]&&cur>=FIRST_KEY?cur:curKey();ensure(cur);syncMsg='Sincronizzato alle '+hhmm();refresh();if(S._ts>remoteTs)push()}catch(e){}
     }else if(localTs>remoteTs){push()}
     else{syncMsg=snap.metadata.fromCache?'Offline: dati salvati sul dispositivo':'Sincronizzato alle '+hhmm();refresh()}
   },()=>{syncMsg='Offline: modifiche salvate sul dispositivo';refresh()});
@@ -454,36 +554,68 @@ function edit(kind,id,fn){
     [S.months[cur][kind],S.tpl[kind]].forEach(a=>{const x=a.find(i=>i.id===id);if(x)fn(x)});
   }
 }
+function potBal(id){const pig=piggyInfo();return id==='general'?pig.general:(pig.bal[id]||0)}
 document.addEventListener('submit',ev=>{if(ev.target.id==='gate-form'){ev.preventDefault();authAction(gateMode==='signup'?'signup':'login')}});
+document.addEventListener('input',ev=>{
+  if(ev.target.id==='cl-pig'){
+    const mx=num(ev.target.dataset.max),v=Math.max(0,Math.min(mx,num(ev.target.value))),el=document.getElementById('cl-carry');
+    if(el)el.textContent=eur(r2(mx-v));
+  }
+});
 document.addEventListener('click',async ev=>{
   const t=ev.target.closest('[data-a],[data-tab]');if(!t)return;
-  if(t.dataset.tab){tab=t.dataset.tab;msg='';render();window.scrollTo(0,0);return}
+  if(t.dataset.tab){tab=t.dataset.tab;msg='';closing=false;render();window.scrollTo(0,0);return}
   const a=t.dataset.a;
   if(a==='mode'){lastEmail=val('lg-mail');lastName=val('lg-name');gateMode=t.dataset.m;msg='';render();return}
   if(a==='showpw'){const i=document.getElementById('lg-pw');i.type=i.type==='password'?'text':'password';t.textContent=i.type==='password'?'Mostra':'Nascondi';return}
   if(a==='reset'||a==='logout'){authAction(a);return}
-  const m=S.months[cur],id=t.dataset.id;
-  if(a==='prev'){cur=prevKey(cur);ensure(cur)}
-  else if(a==='next'){cur=nextKey(cur);ensure(cur)}
-  else if(a==='today'){cur=curKey();ensure(cur)}
-  else if(a==='close'){const n=nextKey(cur);ensure(n);cur=n;window.scrollTo(0,0)}
-  else if(a==='carryauto'){m.carryAuto=true}
+  const m=S.months[cur],id=t.dataset.id,P=S.piggy,today=todayIso();
+  if(a==='prev'){if(cur>FIRST_KEY){cur=prevKey(cur);ensure(cur);closing=false}}
+  else if(a==='next'){cur=nextKey(cur);ensure(cur);closing=false}
+  else if(a==='today'){cur=curKey();ensure(cur);closing=false}
+  else if(a==='closestart'){closing=true}
+  else if(a==='closecancel'){closing=false}
+  else if(a==='clfill'){const el=document.getElementById('cl-pig');if(el){el.value=t.dataset.v;el.dispatchEvent(new Event('input',{bubbles:true}))}return}
+  else if(a==='closeconfirm'){
+    const av=r2(calc(m,cur).avanzo);
+    let toP=av>0?r2(Math.max(0,Math.min(av,num(val('cl-pig'))))):0;
+    const carried=r2(av-toP),n=nextKey(cur),nm=ensure(n);
+    let entryId=null;
+    if(toP>0){entryId=uid();P.entries.push({id:entryId,date:today,amount:toP,note:'Avanzo '+periodTitle(cur),k:cur,method:'none',pot:null,type:'avanzo'})}
+    nm.carry=carried;m.closed={toPiggy:toP,carried,date:today,entryId};
+    closing=false;cur=n;window.scrollTo(0,0)}
+  else if(a==='reopen'){
+    if(m.closed){P.entries=P.entries.filter(e=>e.id!==m.closed.entryId);
+      const nm=S.months[nextKey(cur)];if(nm&&nm.carry===m.closed.carried)nm.carry=0;
+      delete m.closed}}
   else if(a==='m'){method=t.dataset.m}
   else if(a==='addexp'){
     const amount=num(document.getElementById('ex-a').value);
     if(!amount){msg='Inserisci un importo.';render();return}
-    m.exp.push({id:uid(),desc:document.getElementById('ex-d').value.trim(),amount,cat:document.getElementById('ex-c').value,method,date:new Date().toISOString().slice(0,10)});
+    m.exp.push({id:uid(),desc:document.getElementById('ex-d').value.trim(),amount,cat:document.getElementById('ex-c').value,method,date:today});
     msg='Spesa aggiunta.';save();render();document.getElementById('ex-d').focus();return}
   else if(a==='delexp'){m.exp=m.exp.filter(e=>e.id!==id)}
   else if(a==='addsave'){
-    const amount=num(val('sav-amount')),kind=val('sav-kind'),method=val('sav-method'),note=val('sav-note').trim();
+    const amount=r2(num(val('sav-amount'))),kind=val('sav-kind'),pot=val('sav-pot'),mt=val('sav-method'),note=val('sav-note').trim();
     if(amount<=0){msg='Inserisci un importo maggiore di zero.';render();return}
-    const all=Object.values(S.months).flatMap(x=>x.savings||[]);
-    const balance=all.reduce((t,x)=>t+(x.kind==='withdraw'?-1:1)*x.amount,0);
-    if(kind==='withdraw'&&amount>balance){msg='Il prelievo supera il saldo del salvadanaio.';render();return}
-    m.savings=m.savings||[];m.savings.push({id:uid(),amount:r2(amount),kind,method,note,date:new Date().toISOString().slice(0,10)});
-    msg='Movimento registrato.';save();render();return}
-  else if(a==='delsave'){m.savings=(m.savings||[]).filter(x=>x.id!==id)}
+    if(kind==='withdraw'&&amount>potBal(pot)+0.004){msg='Il prelievo supera quanto c\'è in '+(pot==='general'?'Generale':'questo scopo')+'.';render();return}
+    P.entries.push({id:uid(),date:today,amount:kind==='withdraw'?-amount:amount,note,k:cur,method:mt,pot:pot==='general'?null:pot,type:'manual'});
+    msg='Movimento registrato.'}
+  else if(a==='delsave'){P.entries=P.entries.filter(e=>e.id!==id)}
+  else if(a==='addpot'){
+    const name=val('pot-name').trim();
+    if(!name){msg='Dai un nome allo scopo.';render();return}
+    P.pots.push({id:uid(),name,goal:Math.max(0,num(val('pot-goal')))});msg=''}
+  else if(a==='delpot'){
+    P.entries.forEach(e=>{if(e.pot===id)e.pot=null});
+    P.transfers=P.transfers.filter(x=>x.from!==id&&x.to!==id);
+    P.pots=P.pots.filter(p=>p.id!==id)}
+  else if(a==='transfer'){
+    const from=val('tr-from'),to=val('tr-to'),amount=r2(num(val('tr-amount')));
+    if(from===to||amount<=0){msg='Scegli due scopi diversi e un importo maggiore di zero.';render();return}
+    if(amount>potBal(from)+0.004){msg='L\'importo supera quanto c\'è nello scopo di partenza.';render();return}
+    P.transfers.push({id:uid(),date:today,amount,from,to});msg=''}
+  else if(a==='deltr'){P.transfers=P.transfers.filter(x=>x.id!==id)}
   else if(a==='pay'){m.paid[id]=!m.paid[id]}
   else if(a==='deli'){const k=t.dataset.k;
     if(k==='fixed'){Object.keys(S.months).filter(key=>key>=cur).forEach(key=>S.months[key].fixed=S.months[key].fixed.filter(i=>i.id!==id))}
@@ -493,21 +625,18 @@ document.addEventListener('click',async ev=>{
     if(k==='fixed'){Object.keys(S.months).filter(key=>key>=cur).forEach(key=>S.months[key].fixed.push({...it}))}
     else m[k].push(it);
     S.tpl[k].push({...it})}
-  else if(a==='copy'){const ta=document.getElementById('bk');ta.value=JSON.stringify(S);ta.select();
-    try{await navigator.clipboard.writeText(ta.value);msg='Dati copiati.'}catch(e){msg='Testo selezionato: copialo a mano.'}
-    render();document.getElementById('bk').value=JSON.stringify(S);return}
-  else if(a==='imp'){try{const o=JSON.parse(document.getElementById('bk').value);
-    if(!o||!o.months||!o.tpl)throw 0;S=norm(o);cur=curKey();ensure(cur);msg='Dati ripristinati.'}catch(e){msg='Testo non valido.'}}
-  if(!['m','prev','next','today'].includes(a))save();
-  if(a!=='copy'&&a!=='imp')msg=a==='addexp'?msg:'';
+  if(!['m','prev','next','today','closestart','closecancel'].includes(a))save();
+  if(a!=='addexp'&&a!=='addsave')msg='';
   render();
 });
 document.addEventListener('change',ev=>{
   const e=ev.target,m=S.months[cur];
-  if(e.dataset.f){m[e.dataset.f]=num(e.value);if(e.dataset.f==='carry')m.carryAuto=false}
+  if(e.dataset.f){m[e.dataset.f]=num(e.value)}
   else if(e.dataset.k){const p=e.dataset.p;
     const v=p==='name'?e.value:p==='day'?Math.max(0,Math.min(31,parseInt(e.value)||0)):p==='save'?e.checked:num(e.value);
     edit(e.dataset.k,e.dataset.id,x=>x[p]=v)}
+  else if(e.dataset.pot){const p=S.piggy.pots.find(x=>x.id===e.dataset.id);
+    if(p){if(e.dataset.pot==='name')p.name=e.value.trim()||p.name;else p.goal=Math.max(0,num(e.value))}}
   else if(e.dataset.s){
     if(e.dataset.s==='name')S.settings.name=e.value.trim();
     if(e.dataset.s==='startDay'){S.settings.startDay=Math.min(28,Math.max(1,parseInt(e.value)||16));cur=curKey();ensure(cur)}}
